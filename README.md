@@ -1,0 +1,2 @@
+# Air-Drums
+CICS 256 final project — a contactless air drum machine. Three HC-SR04 ultrasonic sensors detect hand gestures within a 15cm trigger zone, each mapped to a drum sound (kick, snare, hi-hat). Audio playback uses the ESP32's built-in DAC driven by a 16kHz hardware timer ISR with drum samples. Signal conditioning via voltage dividers ensures 5V sensor output is safely stepped down to 3.3V for the ESP32 GPIO pins. Built for Spring 2026
