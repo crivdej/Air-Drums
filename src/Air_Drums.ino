@@ -358,3 +358,14 @@ void loop() {
     s.inZone = handPresent;
   }
 }
+
+// void loop() {
+//   long d1 = getDistance(TRIG1, ECHO1);
+//   long d2 = getDistance(TRIG2, ECHO2);
+//   long d3 = getDistance(TRIG3, ECHO3);
+  
+//   Serial.print("HI-HAT: "); Serial.print(d1);
+//   Serial.print("  KICK: "); Serial.print(d2);
+//   Serial.print("  SNARE: "); Serial.println(d3);
+//   delay(200);
+// }
