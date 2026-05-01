@@ -343,8 +343,8 @@ void loop() {
     DrumSensor& s = sensors[i];
     long dist = getDistance(s.trig, s.echo);
 
-    if (dist == 0) continue;  // pulseIn timeout — not a real reading
-
+    if (dist == 0) continue; 
+    
     bool handPresent = (dist < TRIGGER_CM);
 
     if (handPresent && !s.inZone && (now - s.lastTriggerMs >= DEBOUNCE_MS)) {
