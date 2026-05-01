@@ -5,7 +5,7 @@
 #include "hihat.h"
 
 // set this to 0 later when we want the air drum sensors again
-#define NEOPIXEL_TEST_MODE 1
+#define NEOPIXEL_TEST_MODE 0
 
 // ── neopixel ring test ──//
 const int led_data_pin = 23;
@@ -313,7 +313,6 @@ long getDistance(int trig, int echo) {
 void setup() {
   if (NEOPIXEL_TEST_MODE == 1) {
     setup_led_test();
-    return;
   }
 
   Serial.begin(115200);
