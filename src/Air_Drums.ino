@@ -276,7 +276,7 @@ void playDrum(const uint8_t* data, uint32_t length) {
 #define ECHO3 14
 
 // ── Trigger config ────────────────────────────────────────────────────────────
-#define TRIGGER_CM   15     // max position for hand
+#define TRIGGER_CM   10     // max position for hand
 #define DEBOUNCE_MS  100    // minimum ms between re-triggers on the same drum
 
 // Per-sensor state
@@ -296,6 +296,8 @@ DrumSensor sensors[] = {
   { TRIG3, ECHO3, "SNARE",  snare_data, snare_length, false, 0 },
 
 };
+
+
 const int NUM_SENSORS = sizeof(sensors) / sizeof(sensors[0]);
 
 // Sensor helper 

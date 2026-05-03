@@ -17,6 +17,6 @@ def convert(wav_path, var_name, out_path):
         f.write("\n};\n")
 
 convert("kick.wav", "kick", "kick.h")
-convert("snare.wav", "snare", "snare.h")
-convert("hihat.wav", "hihat", "hihat.h")
+# convert("snare.wav", "snare", "snare.h")
+# convert("hihat.wav", "hihat", "hihat.h")
 print("Done — kick.h, snare.h, hihat.h created")
