@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
+#include "air_drums_shared.h"
 #include "kick.h"
+// #include "rhythm_game.h"  // keep the larger game module off for first song-playback tests
 #include "snare.h"
 #include "hihat.h"
 
@@ -14,7 +16,7 @@ const int leds_per_ring = 16;
 const int total_leds = ring_count * leds_per_ring;
 
 int brightness = 35;
-int hit_pixel[ring_count] = {8};
+int hit_pixel[ring_count] = {0};
 int ring_offset[ring_count] = {0};
 
 int moving_pixel = 0;
@@ -275,30 +277,101 @@ void playDrum(const uint8_t* data, uint32_t length) {
 #define TRIG3 19   // snare
 #define ECHO3 14
 
-// ── Trigger config ────────────────────────────────────────────────────────────
-#define TRIGGER_CM   10     // max position for hand
-#define DEBOUNCE_MS  100    // minimum ms between re-triggers on the same drum
-
-// Per-sensor state
-struct DrumSensor {
-  int       trig;
-  int       echo;
-  const char* name;
-  const uint8_t* sample;
-  uint32_t  sampleLen;
-  bool      inZone;
-  uint32_t  lastTriggerMs;
-};
-
-DrumSensor sensors[] = {
+DrumSensor sensors[NUM_SENSORS] = {
   { TRIG1, ECHO1, "HI-HAT", hihat_data, hihat_length, false, 0 },
   { TRIG2, ECHO2, "KICK",   kick_data,  kick_length,  false, 0 },
   { TRIG3, ECHO3, "SNARE",  snare_data, snare_length, false, 0 },
-
 };
 
+const char active_track_id[] = "steves_lava_chicken";
+const int pc_song_start_delay_ms = 3000;
 
-const int NUM_SENSORS = sizeof(sensors) / sizeof(sensors[0]);
+// this small buffer collects one serial command at a time from the pc player
+char music_serial_buffer[64];
+int music_serial_buffer_len = 0;
+
+void sendBoardHello() {
+  // tell the pc player that the board is online
+  Serial.println("BOARD HELLO");
+}
+
+void sendBoardLoad() {
+  // tell the pc player which backing track file to prepare
+  Serial.print("BOARD LOAD ");
+  Serial.println(active_track_id);
+}
+
+void sendBoardStart() {
+  // tell the pc player to start the loaded song after a short delay
+  Serial.print("BOARD START ");
+  Serial.print(active_track_id);
+  Serial.print(" ");
+  Serial.println(pc_song_start_delay_ms);
+}
+
+void sendBoardStop() {
+  Serial.println("BOARD STOP");
+}
+
+void announcePcTrack() {
+  // on boot or resync, send the minimal state the pc needs
+  sendBoardHello();
+  sendBoardLoad();
+}
+
+void printMusicTestCommands() {
+  Serial.println("music test commands:");
+  Serial.println("  s = ask the PC to start the song after 3000 ms");
+  Serial.println("  x = ask the PC to stop the song");
+  Serial.println("  p = resend BOARD HELLO and BOARD LOAD");
+}
+
+void processMusicSerialLine(const char* line) {
+  if (line[0] == '\0') {
+    return;
+  }
+
+  if (strcmp(line, "s") == 0 || strcmp(line, "HOST START_GAME") == 0) {
+    // start only asks the pc to begin song playback; drum hits stay local on the esp32
+    sendBoardStart();
+    Serial.println("pc song start requested");
+    return;
+  }
+
+  if (strcmp(line, "x") == 0 || strcmp(line, "HOST STOP_GAME") == 0) {
+    // stop tells the pc to halt backing-track playback
+    sendBoardStop();
+    Serial.println("pc song stop requested");
+    return;
+  }
+
+  if (strcmp(line, "p") == 0 || strcmp(line, "HOST REQUEST_STATE") == 0 ||
+      strcmp(line, "HOST HELLO") == 0) {
+    // resend state so the pc can recover if it connected late or restarted
+    announcePcTrack();
+    return;
+  }
+}
+
+void handleMusicSerial() {
+  while (Serial.available() > 0) {
+    char incoming = (char)Serial.read();
+
+    if (incoming == '\r' || incoming == '\n') {
+      if (music_serial_buffer_len > 0) {
+        // once we hit a line break, treat the buffered text as one complete command
+        music_serial_buffer[music_serial_buffer_len] = '\0';
+        processMusicSerialLine(music_serial_buffer);
+        music_serial_buffer_len = 0;
+      }
+      continue;
+    }
+
+    if (music_serial_buffer_len < (int)sizeof(music_serial_buffer) - 1) {
+      music_serial_buffer[music_serial_buffer_len++] = incoming;
+    }
+  }
+}
 
 // Sensor helper 
 long getDistance(int trig, int echo) {
@@ -330,6 +403,15 @@ void setup() {
   timerAlarmEnable(audio_timer);
 
   dacWrite(DAC_PIN, 128);
+
+  // keep the bigger rhythm-game module off for the first music-link test
+  // if (NEOPIXEL_TEST_MODE == 0) {
+  //   setup_game_logic();
+  // }
+
+  // tell the pc which track to load as soon as the board starts
+  announcePcTrack();
+  printMusicTestCommands();
 }
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
@@ -339,18 +421,26 @@ void loop() {
     return;
   }
 
+  // keep the bigger rhythm-game module off for the first music-link test
+  // loop_game_logic();
+
+  // listen for simple song-control commands while the board keeps scanning sensors
+  handleMusicSerial();
+
   uint32_t now = millis();
 
   for (int i = 0; i < NUM_SENSORS; i++) {
     DrumSensor& s = sensors[i];
     long dist = getDistance(s.trig, s.echo);
 
-    if (dist == 0) continue; 
-    
+    if (dist == 0) {
+      continue;
+    }
+
+    // this is the same simple rising-edge trigger logic for local drum sounds
     bool handPresent = (dist < TRIGGER_CM);
 
     if (handPresent && !s.inZone && (now - s.lastTriggerMs >= DEBOUNCE_MS)) {
-      // Rising edge into zone — fire once
       playDrum(s.sample, s.sampleLen);
       s.lastTriggerMs = now;
       Serial.print(s.name);
