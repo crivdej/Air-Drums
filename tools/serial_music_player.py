@@ -108,9 +108,13 @@ class PlayerState:
         self.start_timer: threading.Timer | None = None
         self.scheduled_start_time = 0.0
         self.playback_start_time = 0.0
+        self.audio_expected_start_time = 0.0
+        self.audio_launch_lateness_ms = 0
         self.current_duration_seconds = 0.0
         self.board_mode = "unknown"
         self.board_song_ms = 0
+        self.board_song_receive_time = 0.0
+        self.sync_debug_samples_left = 0
         self.board_countdown_ms = 0
         self.score = 0
         self.combo = 0
@@ -148,15 +152,28 @@ class PlayerState:
             self.audio_process = None
             self.scheduled_start_time = 0.0
             self.playback_start_time = 0.0
+            self.audio_expected_start_time = 0.0
+            self.audio_launch_lateness_ms = 0
+            self.sync_debug_samples_left = 0
 
     def launch_audio(self) -> None:
+        timing_text = ""
+
         with self.lock:
             self.start_timer = None
             if self.current_track_path is None:
                 return
 
-            self.playback_start_time = time.monotonic()
+            launch_time = time.monotonic()
+            expected_start_time = self.audio_expected_start_time or self.scheduled_start_time
+            self.playback_start_time = launch_time
             self.scheduled_start_time = 0.0
+            if expected_start_time > 0:
+                self.audio_launch_lateness_ms = int((launch_time - expected_start_time) * 1000)
+                timing_text = (
+                    f"[timing] afplay launched "
+                    f"{self.audio_launch_lateness_ms:+d}ms from scheduled start"
+                )
 
             # afplay keeps this first test tiny because it is built into macos
             self.audio_process = subprocess.Popen(
@@ -164,6 +181,9 @@ class PlayerState:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+
+        if timing_text:
+            self.print_line(timing_text)
 
     def handle_load(self, track_id: str) -> None:
         # when the board announces a track id, find the matching file on the computer
@@ -195,23 +215,32 @@ class PlayerState:
         delay_seconds = max(delay_ms, 0) / 1000.0
 
         with self.lock:
-            self.scheduled_start_time = time.monotonic() + delay_seconds
+            now = time.monotonic()
+            self.scheduled_start_time = now + delay_seconds
+            self.audio_expected_start_time = self.scheduled_start_time
             self.playback_start_time = 0.0
+            self.sync_debug_samples_left = 8
             self.start_timer = threading.Timer(delay_seconds, self.launch_audio)
             self.start_timer.start()
 
-        self.print_line(f"Starting {track_id} in {delay_seconds:.3f}s")
+        self.print_line(
+            f"Starting {track_id} in {delay_seconds:.3f}s "
+            f"(scheduled from BOARD START receive)"
+        )
 
     def handle_game_line(self, line: str) -> None:
+        received_time = time.monotonic()
         parts = line.split(maxsplit=2)
         event = parts[1] if len(parts) > 1 else "UNKNOWN"
         fields = parse_key_values(line)
+        timing_lines: list[str] = []
 
         with self.lock:
             if "mode" in fields:
                 self.board_mode = fields["mode"]
             if "song_ms" in fields:
                 self.board_song_ms = parse_int(fields["song_ms"], self.board_song_ms)
+                self.board_song_receive_time = received_time
             if "countdown_ms" in fields:
                 self.board_countdown_ms = parse_int(fields["countdown_ms"], self.board_countdown_ms)
             if "score" in fields:
@@ -232,7 +261,23 @@ class PlayerState:
             elif event == "START":
                 self.board_mode = "playing"
                 self.board_song_ms = 0
+                self.board_song_receive_time = received_time
                 self.last_game_event = "song started"
+                if self.audio_expected_start_time > 0:
+                    host_delta_ms = int((received_time - self.audio_expected_start_time) * 1000)
+                    timing_lines.append(
+                        f"[timing] GAME START received "
+                        f"{host_delta_ms:+d}ms from scheduled audio start"
+                    )
+            elif event == "TICK" and self.board_mode == "playing" and self.sync_debug_samples_left > 0:
+                if self.playback_start_time > 0 and "song_ms" in fields:
+                    pc_ms_at_receive = int((received_time - self.playback_start_time) * 1000)
+                    sync_ms = pc_ms_at_receive - self.board_song_ms
+                    timing_lines.append(
+                        f"[timing] sync sample pc={pc_ms_at_receive}ms "
+                        f"board={self.board_song_ms}ms sync={sync_ms:+d}ms"
+                    )
+                    self.sync_debug_samples_left -= 1
             elif event == "PAD":
                 name = fields.get("name", fields.get("lane", "?"))
                 mode = fields.get("mode", "?")
@@ -255,6 +300,8 @@ class PlayerState:
 
         if event in ("READY", "COUNTDOWN", "START", "PAD", "HIT", "MISS", "FINISH", "STOP"):
             self.print_line(f"[game] {self.last_game_event}")
+        for timing_text in timing_lines:
+            self.print_line(timing_text)
 
 
 def audio_duration_seconds(path: Path) -> float:
@@ -319,8 +366,27 @@ def pc_elapsed_ms(state: PlayerState) -> int:
     return int((time.monotonic() - playback_start_time) * 1000)
 
 
+def estimated_board_elapsed_ms(state: PlayerState) -> tuple[int, int]:
+    now = time.monotonic()
+
+    with state.lock:
+        board_mode = state.board_mode
+        board_song_ms = state.board_song_ms
+        board_song_receive_time = state.board_song_receive_time
+
+    if board_song_receive_time <= 0:
+        return board_song_ms, 0
+
+    sample_age_ms = max(0, int((now - board_song_receive_time) * 1000))
+    if board_mode == "playing":
+        return board_song_ms + sample_age_ms, sample_age_ms
+
+    return board_song_ms, sample_age_ms
+
+
 def serial_status_line(state: PlayerState) -> str:
     pc_ms = pc_elapsed_ms(state)
+    board_estimated_ms, board_age_ms = estimated_board_elapsed_ms(state)
 
     with state.lock:
         board_mode = state.board_mode
@@ -333,8 +399,8 @@ def serial_status_line(state: PlayerState) -> str:
         last_game_event = state.last_game_event
 
     sync_text = "sync=n/a"
-    if pc_ms > 0 and board_song_ms > 0:
-        sync_text = f"sync={pc_ms - board_song_ms:+d}ms"
+    if pc_ms > 0 and board_estimated_ms > 0:
+        sync_text = f"sync={pc_ms - board_estimated_ms:+d}ms age={board_age_ms}ms"
 
     next_text = "next=none"
     if next_in_ms >= 0:
