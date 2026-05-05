@@ -2,12 +2,13 @@
 #include <Adafruit_NeoPixel.h>
 #include "air_drums_shared.h"
 #include "kick.h"
-// #include "rhythm_game.h"  // keep the larger game module off for first song-playback tests
+#include "rhythm_game.h"
 #include "snare.h"
 #include "hihat.h"
 
 // set this to 0 later when we want the air drum sensors again
 #define NEOPIXEL_TEST_MODE 0
+#define RHYTHM_GAME_MODE 1
 
 // ── neopixel ring test ──//
 const int led_data_pin = 23;
@@ -388,6 +389,7 @@ long getDistance(int trig, int echo) {
 void setup() {
   if (NEOPIXEL_TEST_MODE == 1) {
     setup_led_test();
+    return;
   }
 
   Serial.begin(115200);
@@ -404,10 +406,10 @@ void setup() {
 
   dacWrite(DAC_PIN, 128);
 
-  // keep the bigger rhythm-game module off for the first music-link test
-  // if (NEOPIXEL_TEST_MODE == 0) {
-  //   setup_game_logic();
-  // }
+  if (RHYTHM_GAME_MODE == 1) {
+    setup_game_logic();
+    return;
+  }
 
   // tell the pc which track to load as soon as the board starts
   announcePcTrack();
@@ -421,8 +423,10 @@ void loop() {
     return;
   }
 
-  // keep the bigger rhythm-game module off for the first music-link test
-  // loop_game_logic();
+  if (RHYTHM_GAME_MODE == 1) {
+    loop_game_logic();
+    return;
+  }
 
   // listen for simple song-control commands while the board keeps scanning sensors
   handleMusicSerial();

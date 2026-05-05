@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "air_drums_shared.h"
+#include "generated_charts/steves_lava_chicken_super_easy_chart.h"
 #include "rhythm_game.h"
 
 namespace {
@@ -141,6 +142,54 @@ uint32_t lane_color_for_game(int lane) {
   return game_color(255, 170, 0);
 }
 
+uint32_t scale_game_color(uint32_t color, int percent) {
+  if (percent <= 0) {
+    return game_color(0, 0, 0);
+  }
+
+  if (percent > 100) {
+    percent = 100;
+  }
+
+  uint8_t red = (uint8_t)(color >> 16);
+  uint8_t green = (uint8_t)(color >> 8);
+  uint8_t blue = (uint8_t)(color);
+
+  red = (red * percent) / 100;
+  green = (green * percent) / 100;
+  blue = (blue * percent) / 100;
+
+  return game_color(red, green, blue);
+}
+
+void add_game_pixel_color(int pixel_number, uint32_t color) {
+  uint32_t old_color = game_pixels.getPixelColor(pixel_number);
+
+  uint8_t old_red = (uint8_t)(old_color >> 16);
+  uint8_t old_green = (uint8_t)(old_color >> 8);
+  uint8_t old_blue = (uint8_t)(old_color);
+
+  uint8_t new_red = (uint8_t)(color >> 16);
+  uint8_t new_green = (uint8_t)(color >> 8);
+  uint8_t new_blue = (uint8_t)(color);
+
+  int mixed_red = old_red + new_red;
+  int mixed_green = old_green + new_green;
+  int mixed_blue = old_blue + new_blue;
+
+  if (mixed_red > 255) {
+    mixed_red = 255;
+  }
+  if (mixed_green > 255) {
+    mixed_green = 255;
+  }
+  if (mixed_blue > 255) {
+    mixed_blue = 255;
+  }
+
+  game_pixels.setPixelColor(pixel_number, game_color(mixed_red, mixed_green, mixed_blue));
+}
+
 void play_local_drum_for_lane(int lane) {
   if (lane < 0 || lane >= NUM_SENSORS) {
     return;
@@ -149,27 +198,19 @@ void play_local_drum_for_lane(int lane) {
   playDrum(sensors[lane].sample, sensors[lane].sampleLen);
 }
 
-void load_test_chart() {
+void load_song_chart() {
   note_count = 0;
 
-  notes[note_count++] = {1000, lane_kick, false, false};
-  notes[note_count++] = {1500, lane_snare, false, false};
-  notes[note_count++] = {2000, lane_hihat, false, false};
-  notes[note_count++] = {2500, lane_kick, false, false};
-  notes[note_count++] = {3000, lane_snare, false, false};
-  notes[note_count++] = {3500, lane_hihat, false, false};
-  notes[note_count++] = {4000, lane_kick, false, false};
-  notes[note_count++] = {4500, lane_kick, false, false};
-  notes[note_count++] = {5000, lane_snare, false, false};
-  notes[note_count++] = {5500, lane_hihat, false, false};
-  notes[note_count++] = {6000, lane_kick, false, false};
-  notes[note_count++] = {6500, lane_snare, false, false};
-  notes[note_count++] = {7000, lane_hihat, false, false};
-  notes[note_count++] = {7500, lane_snare, false, false};
-  notes[note_count++] = {8000, lane_kick, false, false};
-  notes[note_count++] = {9000, lane_hihat, false, false};
+  for (int i = 0; i < steves_lava_chicken_super_easy_note_count && i < max_notes; i++) {
+    notes[note_count++] = {
+      steves_lava_chicken_super_easy_notes[i].time_ms,
+      steves_lava_chicken_super_easy_notes[i].lane,
+      false,
+      false,
+    };
+  }
 
-  song_end_time_ms = notes[note_count - 1].time_ms;
+  song_end_time_ms = steves_lava_chicken_super_easy_song_end_ms;
 }
 
 long current_song_ms() {
@@ -295,7 +336,6 @@ void handle_hit(int lane) {
   game_score += score_for_result(result);
   game_combo += 1;
   start_lane_flash(lane, result);
-  play_local_drum_for_lane(lane);
 
   Serial.print("hit lane=");
   Serial.print(lane);
@@ -334,6 +374,7 @@ void update_sensors() {
       (now - sensor.lastTriggerMs >= DEBOUNCE_MS)) {
     sensor.lastTriggerMs = now;
     next_allowed_game_hit_time[lane] = now + game_hit_lockout_ms;
+    play_local_drum_for_lane(lane);
     handle_hit(lane);
   }
 
@@ -367,12 +408,29 @@ void draw_game_hit_zone(int lane) {
   game_pixels.setPixelColor(game_real_pixel(lane, center + 1), game_color(6, 6, 6));
 }
 
-void draw_game_note(int lane, float pixel_pos, uint32_t color) {
+void draw_game_note(int lane, float pixel_pos, uint32_t color, int strength_percent) {
   int center = (int)(pixel_pos + 0.5f);
-  game_pixels.setPixelColor(game_real_pixel(lane, center - 2), game_color(0, 0, 5));
-  game_pixels.setPixelColor(game_real_pixel(lane, center - 1), color);
-  game_pixels.setPixelColor(game_real_pixel(lane, center), color);
-  game_pixels.setPixelColor(game_real_pixel(lane, center + 1), color);
+
+  add_game_pixel_color(
+    game_real_pixel(lane, center - 2),
+    scale_game_color(color, (18 * strength_percent) / 100)
+  );
+  add_game_pixel_color(
+    game_real_pixel(lane, center - 1),
+    scale_game_color(color, (50 * strength_percent) / 100)
+  );
+  add_game_pixel_color(
+    game_real_pixel(lane, center),
+    scale_game_color(color, strength_percent)
+  );
+  add_game_pixel_color(
+    game_real_pixel(lane, center + 1),
+    scale_game_color(color, (50 * strength_percent) / 100)
+  );
+  add_game_pixel_color(
+    game_real_pixel(lane, center + 2),
+    scale_game_color(color, (18 * strength_percent) / 100)
+  );
 }
 
 void draw_game_flash(int lane) {
@@ -437,15 +495,33 @@ void render_game() {
 
       long note_ms = notes[i].time_ms;
       long appear_ms = note_ms - game_fall_time_ms;
+      long disappear_ms = note_ms + miss_window_ms;
 
-      if (song_ms < appear_ms || song_ms > note_ms) {
+      if (song_ms < appear_ms || song_ms > disappear_ms) {
         continue;
       }
 
-      float progress = (float)(song_ms - appear_ms) / (float)game_fall_time_ms;
-      float start_pixel = (float)(game_hit_pixel[notes[i].lane] - game_leds_per_ring);
-      float pixel_pos = start_pixel + progress * game_leds_per_ring;
-      draw_game_note(notes[i].lane, pixel_pos, lane_color_for_game(notes[i].lane));
+      float pixel_pos = (float)game_hit_pixel[notes[i].lane];
+      int strength_percent = 100;
+
+      if (song_ms <= note_ms) {
+        float progress = (float)(song_ms - appear_ms) / (float)game_fall_time_ms;
+        float start_pixel = (float)(game_hit_pixel[notes[i].lane] - game_leds_per_ring);
+        pixel_pos = start_pixel + progress * game_leds_per_ring;
+      } else {
+        long late_ms = song_ms - note_ms;
+        strength_percent = 100 - (int)((late_ms * 55) / miss_window_ms);
+        if (strength_percent < 45) {
+          strength_percent = 45;
+        }
+      }
+
+      draw_game_note(
+        notes[i].lane,
+        pixel_pos,
+        lane_color_for_game(notes[i].lane),
+        strength_percent
+      );
     }
   }
 
@@ -591,7 +667,7 @@ void setup_game_logic() {
   game_pixels.clear();
   game_pixels.show();
 
-  load_test_chart();
+  load_song_chart();
   game_mode = mode_ready;
 
   announce_player_state();
