@@ -43,6 +43,26 @@ def find_track_file(tracks_dir: Path, track_id: str) -> Path | None:
     return None
 
 
+def parse_key_values(line: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+
+    for token in line.split()[2:]:
+        if "=" not in token:
+            continue
+
+        key, value = token.split("=", 1)
+        fields[key] = value
+
+    return fields
+
+
+def parse_int(value: str, fallback: int) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        return fallback
+
+
 class PlayerState:
     def __init__(self, serial_port, tracks_dir: Path) -> None:
         self.serial_port = serial_port
@@ -54,12 +74,26 @@ class PlayerState:
         self.scheduled_start_time = 0.0
         self.playback_start_time = 0.0
         self.current_duration_seconds = 0.0
+        self.board_mode = "unknown"
+        self.board_song_ms = 0
+        self.board_countdown_ms = 0
+        self.score = 0
+        self.combo = 0
+        self.next_lane = "none"
+        self.next_note_ms = -1
+        self.next_in_ms = -1
+        self.last_game_event = "waiting for board"
         self.lock = threading.Lock()
+        self.print_lock = threading.Lock()
+
+    def print_line(self, text: str) -> None:
+        with self.print_lock:
+            print("\r" + " " * 120 + "\r" + text, flush=True)
 
     def send_line(self, line: str) -> None:
         # every protocol message is a single newline-terminated line
         if self.serial_port is None:
-            print(f"[mock host] {line}", flush=True)
+            self.print_line(f"[mock host] {line}")
             return
 
         self.serial_port.write((line + "\n").encode("utf-8"))
@@ -106,14 +140,14 @@ class PlayerState:
             self.current_track_id = ""
             self.current_track_path = None
             self.send_line(f"HOST ERROR missing_track {track_id}")
-            print(f"Missing track: {track_id}", flush=True)
+            self.print_line(f"Missing track: {track_id}")
             return
 
         self.current_track_id = track_id
         self.current_track_path = track_path
         self.current_duration_seconds = audio_duration_seconds(track_path)
         self.send_line(f"HOST READY {track_id}")
-        print(f"Loaded track {track_id}: {track_path.name}", flush=True)
+        self.print_line(f"Loaded track {track_id}: {track_path.name}")
 
     def handle_start(self, track_id: str, delay_ms: int) -> None:
         # the board sends a future delay so both sides can agree on when music should begin
@@ -132,7 +166,58 @@ class PlayerState:
             self.start_timer = threading.Timer(delay_seconds, self.launch_audio)
             self.start_timer.start()
 
-        print(f"Starting {track_id} in {delay_seconds:.3f}s", flush=True)
+        self.print_line(f"Starting {track_id} in {delay_seconds:.3f}s")
+
+    def handle_game_line(self, line: str) -> None:
+        fields = parse_key_values(line)
+        event = line.split(maxsplit=2)[1] if len(line.split(maxsplit=2)) > 1 else "UNKNOWN"
+
+        with self.lock:
+            if "mode" in fields:
+                self.board_mode = fields["mode"]
+            if "song_ms" in fields:
+                self.board_song_ms = parse_int(fields["song_ms"], self.board_song_ms)
+            if "countdown_ms" in fields:
+                self.board_countdown_ms = parse_int(fields["countdown_ms"], self.board_countdown_ms)
+            if "score" in fields:
+                self.score = parse_int(fields["score"], self.score)
+            if "combo" in fields:
+                self.combo = parse_int(fields["combo"], self.combo)
+            if "next_name" in fields:
+                self.next_lane = fields["next_name"]
+            if "next_note_ms" in fields:
+                self.next_note_ms = parse_int(fields["next_note_ms"], self.next_note_ms)
+            if "next_in_ms" in fields:
+                self.next_in_ms = parse_int(fields["next_in_ms"], self.next_in_ms)
+
+            if event == "READY":
+                self.board_mode = "ready"
+                self.last_game_event = f"ready notes={fields.get('notes', '?')}"
+            elif event == "COUNTDOWN":
+                self.board_mode = "countdown"
+                self.last_game_event = f"countdown {fields.get('delay_ms', '?')}ms"
+            elif event == "START":
+                self.board_mode = "playing"
+                self.board_song_ms = 0
+                self.last_game_event = "song started"
+            elif event == "HIT":
+                name = fields.get("name", fields.get("lane", "?"))
+                result = fields.get("result", "?")
+                delta = fields.get("delta_ms", "?")
+                self.last_game_event = f"hit {name} {result} delta={delta}ms"
+            elif event == "MISS":
+                name = fields.get("name", fields.get("lane", "?"))
+                note_ms = fields.get("note_ms", "?")
+                self.last_game_event = f"miss {name} note={note_ms}ms"
+            elif event == "FINISH":
+                self.board_mode = "finished"
+                self.last_game_event = "song finished"
+            elif event == "STOP":
+                self.board_mode = "ready"
+                self.last_game_event = "stopped"
+
+        if event in ("READY", "COUNTDOWN", "START", "HIT", "MISS", "FINISH", "STOP"):
+            self.print_line(f"[game] {self.last_game_event}")
 
 
 def audio_duration_seconds(path: Path) -> float:
@@ -186,6 +271,47 @@ def progress_line(state: PlayerState) -> str:
     return f"playing: [{bar}] {format_time(elapsed)} / {format_time(duration)}"
 
 
+def pc_elapsed_ms(state: PlayerState) -> int:
+    with state.lock:
+        playback_start_time = state.playback_start_time
+        audio_process = state.audio_process
+
+    if audio_process is None or audio_process.poll() is not None or playback_start_time <= 0:
+        return 0
+
+    return int((time.monotonic() - playback_start_time) * 1000)
+
+
+def serial_status_line(state: PlayerState) -> str:
+    pc_ms = pc_elapsed_ms(state)
+
+    with state.lock:
+        board_mode = state.board_mode
+        board_song_ms = state.board_song_ms
+        board_countdown_ms = state.board_countdown_ms
+        score = state.score
+        combo = state.combo
+        next_lane = state.next_lane
+        next_in_ms = state.next_in_ms
+        last_game_event = state.last_game_event
+
+    sync_text = "sync=n/a"
+    if pc_ms > 0 and board_song_ms > 0:
+        sync_text = f"sync={pc_ms - board_song_ms:+d}ms"
+
+    next_text = "next=none"
+    if next_in_ms >= 0:
+        next_text = f"next={next_lane} in {next_in_ms}ms"
+
+    if board_countdown_ms > 0:
+        next_text = f"countdown={board_countdown_ms}ms"
+
+    return (
+        f"{progress_line(state)} | board={board_mode} {board_song_ms}ms | "
+        f"{sync_text} | score={score} combo={combo} | {next_text} | {last_game_event}"
+    )
+
+
 def run_no_board_mode(state: PlayerState, track_id: str, delay_ms: int) -> int:
     # this mode lets us test the pc playback side without an esp32 connected
     state.handle_load(track_id)
@@ -231,7 +357,7 @@ def read_serial_loop(state: PlayerState) -> None:
         try:
             raw_line = state.serial_port.readline()
         except Exception as exc:
-            print(f"Serial error: {exc}", flush=True)
+            state.print_line(f"Serial error: {exc}")
             return
 
         if not raw_line:
@@ -245,12 +371,16 @@ def read_serial_loop(state: PlayerState) -> None:
         if not line:
             continue
 
-        if not line.startswith("BOARD "):
-            # keep normal board debug output visible without treating it as protocol
-            print(f"[board] {line}", flush=True)
+        if line.startswith("GAME "):
+            state.handle_game_line(line)
             continue
 
-        print(f"[protocol] {line}", flush=True)
+        if not line.startswith("BOARD "):
+            # keep normal board debug output visible without treating it as protocol
+            state.print_line(f"[board] {line}")
+            continue
+
+        state.print_line(f"[protocol] {line}")
 
         if line == "BOARD HELLO":
             continue
@@ -263,14 +393,14 @@ def read_serial_loop(state: PlayerState) -> None:
             # board start lines carry both the track id and the requested delay
             payload = line[len("BOARD START "):].strip().split()
             if len(payload) != 2:
-                print(f"Ignoring malformed start line: {line}", flush=True)
+                state.print_line(f"Ignoring malformed start line: {line}")
                 continue
 
             track_id, delay_text = payload
             try:
                 delay_ms = int(delay_text)
             except ValueError:
-                print(f"Ignoring malformed delay: {line}", flush=True)
+                state.print_line(f"Ignoring malformed delay: {line}")
                 continue
 
             state.handle_start(track_id, delay_ms)
@@ -278,7 +408,7 @@ def read_serial_loop(state: PlayerState) -> None:
 
         if line == "BOARD STOP":
             state.stop_audio()
-            print("Stopped playback", flush=True)
+            state.print_line("Stopped playback")
 
 
 def main() -> int:
@@ -353,24 +483,36 @@ def main() -> int:
 
     try:
         while True:
-            try:
-                command = input("> ").strip().lower()
-            except EOFError:
-                command = "quit"
+            readable, _, _ = select.select([sys.stdin], [], [], 0.25)
 
-            if command in ("", "start"):
+            if not readable:
+                with state.print_lock:
+                    print(f"\r{serial_status_line(state):<160}", end="", flush=True)
+                continue
+
+            raw_command = sys.stdin.readline()
+            if raw_command == "":
+                command = "quit"
+            else:
+                command = raw_command.strip().lower()
+
+            with state.print_lock:
+                print("\r" + " " * 160 + "\r", end="", flush=True)
+
+            if command in ("", "start", "s"):
                 # keep manual testing simple by letting start mean "ask the board to fire the song cue"
                 state.send_line("HOST START_GAME")
-            elif command == "stop":
+            elif command in ("stop", "x"):
                 state.send_line("HOST STOP_GAME")
-            elif command == "reload":
+            elif command in ("reload", "p"):
                 state.send_line("HOST REQUEST_STATE")
             elif command == "quit":
                 state.send_line("HOST STOP_GAME")
                 state.stop_audio()
+                print()
                 return 0
             else:
-                print("Unknown command. Use: start, stop, reload, quit", flush=True)
+                state.print_line("Unknown command. Use: start, stop, reload, quit")
     finally:
         state.stop_audio()
         serial_port.close()

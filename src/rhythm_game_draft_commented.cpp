@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "air_drums_shared.h"
+#include "generated_charts/steves_lava_chicken_super_easy_chart.h"
 #include "rhythm_game.h"
 
 namespace {
@@ -13,6 +14,7 @@ constexpr int game_total_leds = game_ring_count * game_leds_per_ring;
 constexpr int game_led_data_pin = 15;
 constexpr int max_notes = 96;
 constexpr int serial_buffer_size = 96;
+constexpr bool game_leds_enabled = false;
 
 constexpr int lane_hihat = 0;
 constexpr int lane_kick = 1;
@@ -57,6 +59,7 @@ unsigned long game_start_time = 0;
 unsigned long countdown_start_time = 0;
 unsigned long scheduled_song_start_time = 0;
 unsigned long last_sensor_read_time = 0;
+unsigned long last_game_telemetry_time = 0;
 unsigned long flash_until_time[game_ring_count] = {0, 0, 0};
 unsigned long next_allowed_game_hit_time[game_ring_count] = {0, 0, 0};
 
@@ -78,6 +81,8 @@ GameNote notes[max_notes];
 int note_count = 0;
 
 Adafruit_NeoPixel game_pixels(game_total_leds, game_led_data_pin, NEO_GRB + NEO_KHZ800);
+
+long current_song_ms();
 
 bool starts_with(const char* value, const char* prefix) {
   return strncmp(value, prefix, strlen(prefix)) == 0;
@@ -106,6 +111,115 @@ void send_board_stop() {
 void announce_player_state() {
   send_board_line("BOARD HELLO");
   send_board_load();
+}
+
+const char* lane_name_for_game(int lane) {
+  if (lane == lane_hihat) {
+    return "hihat";
+  }
+
+  if (lane == lane_kick) {
+    return "kick";
+  }
+
+  if (lane == lane_snare) {
+    return "snare";
+  }
+
+  return "unknown";
+}
+
+const char* mode_name_for_game() {
+  if (game_mode == mode_ready) {
+    return "ready";
+  }
+
+  if (game_mode == mode_countdown) {
+    return "countdown";
+  }
+
+  if (game_mode == mode_playing) {
+    return "playing";
+  }
+
+  if (game_mode == mode_finished) {
+    return "finished";
+  }
+
+  return "idle";
+}
+
+int next_note_index(long song_ms) {
+  int best_note = -1;
+
+  for (int i = 0; i < note_count; i++) {
+    if (notes[i].was_hit || notes[i].was_missed) {
+      continue;
+    }
+
+    if (notes[i].time_ms < song_ms - miss_window_ms) {
+      continue;
+    }
+
+    if (best_note == -1 || notes[i].time_ms < notes[best_note].time_ms) {
+      best_note = i;
+    }
+  }
+
+  return best_note;
+}
+
+void send_score_line() {
+  Serial.print("GAME SCORE score=");
+  Serial.print(game_score);
+  Serial.print(" combo=");
+  Serial.println(game_combo);
+}
+
+void send_game_telemetry(bool force_send) {
+  unsigned long now = millis();
+
+  if (!force_send && now - last_game_telemetry_time < 250) {
+    return;
+  }
+
+  last_game_telemetry_time = now;
+
+  long song_ms = current_song_ms();
+  long countdown_ms = 0;
+  if (game_mode == mode_countdown && scheduled_song_start_time > now) {
+    countdown_ms = (long)(scheduled_song_start_time - now);
+  }
+
+  int next_note = next_note_index(song_ms);
+  int next_lane = -1;
+  int next_note_ms = -1;
+  int next_in_ms = -1;
+
+  if (next_note >= 0) {
+    next_lane = notes[next_note].lane;
+    next_note_ms = notes[next_note].time_ms;
+    next_in_ms = notes[next_note].time_ms - song_ms;
+  }
+
+  Serial.print("GAME TICK mode=");
+  Serial.print(mode_name_for_game());
+  Serial.print(" song_ms=");
+  Serial.print(song_ms);
+  Serial.print(" countdown_ms=");
+  Serial.print(countdown_ms);
+  Serial.print(" score=");
+  Serial.print(game_score);
+  Serial.print(" combo=");
+  Serial.print(game_combo);
+  Serial.print(" next_lane=");
+  Serial.print(next_lane);
+  Serial.print(" next_name=");
+  Serial.print(next_lane >= 0 ? lane_name_for_game(next_lane) : "none");
+  Serial.print(" next_note_ms=");
+  Serial.print(next_note_ms);
+  Serial.print(" next_in_ms=");
+  Serial.println(next_in_ms);
 }
 
 int game_wrap_pixel(int pixel) {
@@ -141,6 +255,54 @@ uint32_t lane_color_for_game(int lane) {
   return game_color(255, 170, 0);
 }
 
+uint32_t scale_game_color(uint32_t color, int percent) {
+  if (percent <= 0) {
+    return game_color(0, 0, 0);
+  }
+
+  if (percent > 100) {
+    percent = 100;
+  }
+
+  uint8_t red = (uint8_t)(color >> 16);
+  uint8_t green = (uint8_t)(color >> 8);
+  uint8_t blue = (uint8_t)(color);
+
+  red = (red * percent) / 100;
+  green = (green * percent) / 100;
+  blue = (blue * percent) / 100;
+
+  return game_color(red, green, blue);
+}
+
+void add_game_pixel_color(int pixel_number, uint32_t color) {
+  uint32_t old_color = game_pixels.getPixelColor(pixel_number);
+
+  uint8_t old_red = (uint8_t)(old_color >> 16);
+  uint8_t old_green = (uint8_t)(old_color >> 8);
+  uint8_t old_blue = (uint8_t)(old_color);
+
+  uint8_t new_red = (uint8_t)(color >> 16);
+  uint8_t new_green = (uint8_t)(color >> 8);
+  uint8_t new_blue = (uint8_t)(color);
+
+  int mixed_red = old_red + new_red;
+  int mixed_green = old_green + new_green;
+  int mixed_blue = old_blue + new_blue;
+
+  if (mixed_red > 255) {
+    mixed_red = 255;
+  }
+  if (mixed_green > 255) {
+    mixed_green = 255;
+  }
+  if (mixed_blue > 255) {
+    mixed_blue = 255;
+  }
+
+  game_pixels.setPixelColor(pixel_number, game_color(mixed_red, mixed_green, mixed_blue));
+}
+
 void play_local_drum_for_lane(int lane) {
   if (lane < 0 || lane >= NUM_SENSORS) {
     return;
@@ -149,27 +311,19 @@ void play_local_drum_for_lane(int lane) {
   playDrum(sensors[lane].sample, sensors[lane].sampleLen);
 }
 
-void load_test_chart() {
+void load_song_chart() {
   note_count = 0;
 
-  notes[note_count++] = {1000, lane_kick, false, false};
-  notes[note_count++] = {1500, lane_snare, false, false};
-  notes[note_count++] = {2000, lane_hihat, false, false};
-  notes[note_count++] = {2500, lane_kick, false, false};
-  notes[note_count++] = {3000, lane_snare, false, false};
-  notes[note_count++] = {3500, lane_hihat, false, false};
-  notes[note_count++] = {4000, lane_kick, false, false};
-  notes[note_count++] = {4500, lane_kick, false, false};
-  notes[note_count++] = {5000, lane_snare, false, false};
-  notes[note_count++] = {5500, lane_hihat, false, false};
-  notes[note_count++] = {6000, lane_kick, false, false};
-  notes[note_count++] = {6500, lane_snare, false, false};
-  notes[note_count++] = {7000, lane_hihat, false, false};
-  notes[note_count++] = {7500, lane_snare, false, false};
-  notes[note_count++] = {8000, lane_kick, false, false};
-  notes[note_count++] = {9000, lane_hihat, false, false};
+  for (int i = 0; i < steves_lava_chicken_super_easy_note_count && i < max_notes; i++) {
+    notes[note_count++] = {
+      steves_lava_chicken_super_easy_notes[i].time_ms,
+      steves_lava_chicken_super_easy_notes[i].lane,
+      false,
+      false,
+    };
+  }
 
-  song_end_time_ms = notes[note_count - 1].time_ms;
+  song_end_time_ms = steves_lava_chicken_super_easy_song_end_ms;
 }
 
 long current_song_ms() {
@@ -284,9 +438,19 @@ void handle_hit(int lane) {
   if (best_note == -1) {
     game_combo = 0;
     start_lane_flash(lane, result_miss);
-    Serial.print("hit lane=");
+    Serial.print("GAME HIT lane=");
     Serial.print(lane);
-    Serial.println(" result=miss");
+    Serial.print(" name=");
+    Serial.print(lane_name_for_game(lane));
+    Serial.print(" local_ms=");
+    Serial.print(song_ms);
+    Serial.print(" result=miss delta_ms=none score=");
+    Serial.print(game_score);
+    Serial.print(" combo=");
+    Serial.print(game_combo);
+    Serial.print(" distance_cm=");
+    Serial.println((int)game_sensor_cm[lane]);
+    send_score_line();
     return;
   }
 
@@ -295,16 +459,26 @@ void handle_hit(int lane) {
   game_score += score_for_result(result);
   game_combo += 1;
   start_lane_flash(lane, result);
-  play_local_drum_for_lane(lane);
 
-  Serial.print("hit lane=");
+  Serial.print("GAME HIT lane=");
   Serial.print(lane);
+  Serial.print(" name=");
+  Serial.print(lane_name_for_game(lane));
   Serial.print(" local_ms=");
   Serial.print(song_ms);
+  Serial.print(" note_ms=");
+  Serial.print(notes[best_note].time_ms);
   Serial.print(" result=");
   Serial.print(result_name(result));
   Serial.print(" delta_ms=");
-  Serial.println(song_ms - notes[best_note].time_ms);
+  Serial.print(song_ms - notes[best_note].time_ms);
+  Serial.print(" score=");
+  Serial.print(game_score);
+  Serial.print(" combo=");
+  Serial.print(game_combo);
+  Serial.print(" distance_cm=");
+  Serial.println((int)game_sensor_cm[lane]);
+  send_score_line();
 }
 
 void update_sensors() {
@@ -334,6 +508,7 @@ void update_sensors() {
       (now - sensor.lastTriggerMs >= DEBOUNCE_MS)) {
     sensor.lastTriggerMs = now;
     next_allowed_game_hit_time[lane] = now + game_hit_lockout_ms;
+    play_local_drum_for_lane(lane);
     handle_hit(lane);
   }
 
@@ -356,6 +531,19 @@ void check_for_misses() {
       notes[i].was_missed = true;
       game_combo = 0;
       start_lane_flash(notes[i].lane, result_miss);
+      Serial.print("GAME MISS lane=");
+      Serial.print(notes[i].lane);
+      Serial.print(" name=");
+      Serial.print(lane_name_for_game(notes[i].lane));
+      Serial.print(" note_ms=");
+      Serial.print(notes[i].time_ms);
+      Serial.print(" song_ms=");
+      Serial.print(song_ms);
+      Serial.print(" score=");
+      Serial.print(game_score);
+      Serial.print(" combo=");
+      Serial.println(game_combo);
+      send_score_line();
     }
   }
 }
@@ -367,12 +555,29 @@ void draw_game_hit_zone(int lane) {
   game_pixels.setPixelColor(game_real_pixel(lane, center + 1), game_color(6, 6, 6));
 }
 
-void draw_game_note(int lane, float pixel_pos, uint32_t color) {
+void draw_game_note(int lane, float pixel_pos, uint32_t color, int strength_percent) {
   int center = (int)(pixel_pos + 0.5f);
-  game_pixels.setPixelColor(game_real_pixel(lane, center - 2), game_color(0, 0, 5));
-  game_pixels.setPixelColor(game_real_pixel(lane, center - 1), color);
-  game_pixels.setPixelColor(game_real_pixel(lane, center), color);
-  game_pixels.setPixelColor(game_real_pixel(lane, center + 1), color);
+
+  add_game_pixel_color(
+    game_real_pixel(lane, center - 2),
+    scale_game_color(color, (18 * strength_percent) / 100)
+  );
+  add_game_pixel_color(
+    game_real_pixel(lane, center - 1),
+    scale_game_color(color, (50 * strength_percent) / 100)
+  );
+  add_game_pixel_color(
+    game_real_pixel(lane, center),
+    scale_game_color(color, strength_percent)
+  );
+  add_game_pixel_color(
+    game_real_pixel(lane, center + 1),
+    scale_game_color(color, (50 * strength_percent) / 100)
+  );
+  add_game_pixel_color(
+    game_real_pixel(lane, center + 2),
+    scale_game_color(color, (18 * strength_percent) / 100)
+  );
 }
 
 void draw_game_flash(int lane) {
@@ -417,6 +622,10 @@ void render_countdown() {
 }
 
 void render_game() {
+  if (!game_leds_enabled) {
+    return;
+  }
+
   game_pixels.clear();
 
   for (int lane = 0; lane < game_ring_count; lane++) {
@@ -437,15 +646,33 @@ void render_game() {
 
       long note_ms = notes[i].time_ms;
       long appear_ms = note_ms - game_fall_time_ms;
+      long disappear_ms = note_ms + miss_window_ms;
 
-      if (song_ms < appear_ms || song_ms > note_ms) {
+      if (song_ms < appear_ms || song_ms > disappear_ms) {
         continue;
       }
 
-      float progress = (float)(song_ms - appear_ms) / (float)game_fall_time_ms;
-      float start_pixel = (float)(game_hit_pixel[notes[i].lane] - game_leds_per_ring);
-      float pixel_pos = start_pixel + progress * game_leds_per_ring;
-      draw_game_note(notes[i].lane, pixel_pos, lane_color_for_game(notes[i].lane));
+      float pixel_pos = (float)game_hit_pixel[notes[i].lane];
+      int strength_percent = 100;
+
+      if (song_ms <= note_ms) {
+        float progress = (float)(song_ms - appear_ms) / (float)game_fall_time_ms;
+        float start_pixel = (float)(game_hit_pixel[notes[i].lane] - game_leds_per_ring);
+        pixel_pos = start_pixel + progress * game_leds_per_ring;
+      } else {
+        long late_ms = song_ms - note_ms;
+        strength_percent = 100 - (int)((late_ms * 55) / miss_window_ms);
+        if (strength_percent < 45) {
+          strength_percent = 45;
+        }
+      }
+
+      draw_game_note(
+        notes[i].lane,
+        pixel_pos,
+        lane_color_for_game(notes[i].lane),
+        strength_percent
+      );
     }
   }
 
@@ -459,7 +686,8 @@ void render_game() {
 void stop_game() {
   game_mode = mode_ready;
   send_board_stop();
-  Serial.println("game stopped");
+  Serial.println("GAME STOP mode=ready");
+  send_game_telemetry(true);
 }
 
 void start_countdown() {
@@ -480,7 +708,17 @@ void start_countdown() {
   }
 
   send_board_start(countdown_length_ms);
-  Serial.println("countdown started");
+  Serial.print("GAME COUNTDOWN delay_ms=");
+  Serial.print(countdown_length_ms);
+  Serial.print(" notes=");
+  Serial.print(note_count);
+  Serial.print(" song_end_ms=");
+  Serial.print(song_end_time_ms);
+  Serial.print(" score=");
+  Serial.print(game_score);
+  Serial.print(" combo=");
+  Serial.println(game_combo);
+  send_game_telemetry(true);
 }
 
 void update_countdown() {
@@ -491,7 +729,11 @@ void update_countdown() {
   if (millis() >= scheduled_song_start_time) {
     game_mode = mode_playing;
     game_start_time = scheduled_song_start_time;
-    Serial.println("game started");
+    Serial.print("GAME START song_ms=0 notes=");
+    Serial.print(note_count);
+    Serial.print(" song_end_ms=");
+    Serial.println(song_end_time_ms);
+    send_game_telemetry(true);
   }
 }
 
@@ -507,10 +749,13 @@ void finish_song_if_needed() {
 
   game_mode = mode_finished;
   send_board_stop();
-  Serial.print("song finished score=");
+  Serial.print("GAME FINISH song_ms=");
+  Serial.print(song_ms);
+  Serial.print(" score=");
   Serial.print(game_score);
   Serial.print(" combo=");
   Serial.println(game_combo);
+  send_game_telemetry(true);
 }
 
 void handle_host_ready(const char* track_id) {
@@ -586,23 +831,36 @@ void handle_game_serial_input() {
 }  // namespace
 
 void setup_game_logic() {
-  game_pixels.begin();
-  game_pixels.setBrightness(game_brightness);
-  game_pixels.clear();
-  game_pixels.show();
+  if (game_leds_enabled) {
+    game_pixels.begin();
+    game_pixels.setBrightness(game_brightness);
+    game_pixels.clear();
+    game_pixels.show();
+  }
 
-  load_test_chart();
+  load_song_chart();
   game_mode = mode_ready;
 
   announce_player_state();
+  Serial.print("GAME READY notes=");
+  Serial.print(note_count);
+  Serial.print(" song_end_ms=");
+  Serial.print(song_end_time_ms);
+  Serial.print(" leds_enabled=");
+  Serial.println(game_leds_enabled ? 1 : 0);
   Serial.println("game ready");
   Serial.println("commands: s=start, x=stop, p=resend player state");
   Serial.println("host commands: HOST START_GAME, HOST STOP_GAME, HOST REQUEST_STATE");
+  send_game_telemetry(true);
 }
 
 void loop_game_logic() {
   handle_game_serial_input();
   update_countdown();
+
+  if (game_mode == mode_countdown || game_mode == mode_playing) {
+    send_game_telemetry(false);
+  }
 
   if (game_mode == mode_playing) {
     update_sensors();
