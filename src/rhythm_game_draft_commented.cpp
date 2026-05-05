@@ -14,6 +14,7 @@ constexpr int game_total_leds = game_ring_count * game_leds_per_ring;
 constexpr int game_led_data_pin = 15;
 constexpr int max_notes = 96;
 constexpr int serial_buffer_size = 96;
+constexpr bool game_leds_enabled = false;
 
 constexpr int lane_hihat = 0;
 constexpr int lane_kick = 1;
@@ -58,6 +59,7 @@ unsigned long game_start_time = 0;
 unsigned long countdown_start_time = 0;
 unsigned long scheduled_song_start_time = 0;
 unsigned long last_sensor_read_time = 0;
+unsigned long last_game_telemetry_time = 0;
 unsigned long flash_until_time[game_ring_count] = {0, 0, 0};
 unsigned long next_allowed_game_hit_time[game_ring_count] = {0, 0, 0};
 
@@ -79,6 +81,8 @@ GameNote notes[max_notes];
 int note_count = 0;
 
 Adafruit_NeoPixel game_pixels(game_total_leds, game_led_data_pin, NEO_GRB + NEO_KHZ800);
+
+long current_song_ms();
 
 bool starts_with(const char* value, const char* prefix) {
   return strncmp(value, prefix, strlen(prefix)) == 0;
@@ -107,6 +111,115 @@ void send_board_stop() {
 void announce_player_state() {
   send_board_line("BOARD HELLO");
   send_board_load();
+}
+
+const char* lane_name_for_game(int lane) {
+  if (lane == lane_hihat) {
+    return "hihat";
+  }
+
+  if (lane == lane_kick) {
+    return "kick";
+  }
+
+  if (lane == lane_snare) {
+    return "snare";
+  }
+
+  return "unknown";
+}
+
+const char* mode_name_for_game() {
+  if (game_mode == mode_ready) {
+    return "ready";
+  }
+
+  if (game_mode == mode_countdown) {
+    return "countdown";
+  }
+
+  if (game_mode == mode_playing) {
+    return "playing";
+  }
+
+  if (game_mode == mode_finished) {
+    return "finished";
+  }
+
+  return "idle";
+}
+
+int next_note_index(long song_ms) {
+  int best_note = -1;
+
+  for (int i = 0; i < note_count; i++) {
+    if (notes[i].was_hit || notes[i].was_missed) {
+      continue;
+    }
+
+    if (notes[i].time_ms < song_ms - miss_window_ms) {
+      continue;
+    }
+
+    if (best_note == -1 || notes[i].time_ms < notes[best_note].time_ms) {
+      best_note = i;
+    }
+  }
+
+  return best_note;
+}
+
+void send_score_line() {
+  Serial.print("GAME SCORE score=");
+  Serial.print(game_score);
+  Serial.print(" combo=");
+  Serial.println(game_combo);
+}
+
+void send_game_telemetry(bool force_send) {
+  unsigned long now = millis();
+
+  if (!force_send && now - last_game_telemetry_time < 250) {
+    return;
+  }
+
+  last_game_telemetry_time = now;
+
+  long song_ms = current_song_ms();
+  long countdown_ms = 0;
+  if (game_mode == mode_countdown && scheduled_song_start_time > now) {
+    countdown_ms = (long)(scheduled_song_start_time - now);
+  }
+
+  int next_note = next_note_index(song_ms);
+  int next_lane = -1;
+  int next_note_ms = -1;
+  int next_in_ms = -1;
+
+  if (next_note >= 0) {
+    next_lane = notes[next_note].lane;
+    next_note_ms = notes[next_note].time_ms;
+    next_in_ms = notes[next_note].time_ms - song_ms;
+  }
+
+  Serial.print("GAME TICK mode=");
+  Serial.print(mode_name_for_game());
+  Serial.print(" song_ms=");
+  Serial.print(song_ms);
+  Serial.print(" countdown_ms=");
+  Serial.print(countdown_ms);
+  Serial.print(" score=");
+  Serial.print(game_score);
+  Serial.print(" combo=");
+  Serial.print(game_combo);
+  Serial.print(" next_lane=");
+  Serial.print(next_lane);
+  Serial.print(" next_name=");
+  Serial.print(next_lane >= 0 ? lane_name_for_game(next_lane) : "none");
+  Serial.print(" next_note_ms=");
+  Serial.print(next_note_ms);
+  Serial.print(" next_in_ms=");
+  Serial.println(next_in_ms);
 }
 
 int game_wrap_pixel(int pixel) {
@@ -325,9 +438,19 @@ void handle_hit(int lane) {
   if (best_note == -1) {
     game_combo = 0;
     start_lane_flash(lane, result_miss);
-    Serial.print("hit lane=");
+    Serial.print("GAME HIT lane=");
     Serial.print(lane);
-    Serial.println(" result=miss");
+    Serial.print(" name=");
+    Serial.print(lane_name_for_game(lane));
+    Serial.print(" local_ms=");
+    Serial.print(song_ms);
+    Serial.print(" result=miss delta_ms=none score=");
+    Serial.print(game_score);
+    Serial.print(" combo=");
+    Serial.print(game_combo);
+    Serial.print(" distance_cm=");
+    Serial.println((int)game_sensor_cm[lane]);
+    send_score_line();
     return;
   }
 
@@ -337,14 +460,25 @@ void handle_hit(int lane) {
   game_combo += 1;
   start_lane_flash(lane, result);
 
-  Serial.print("hit lane=");
+  Serial.print("GAME HIT lane=");
   Serial.print(lane);
+  Serial.print(" name=");
+  Serial.print(lane_name_for_game(lane));
   Serial.print(" local_ms=");
   Serial.print(song_ms);
+  Serial.print(" note_ms=");
+  Serial.print(notes[best_note].time_ms);
   Serial.print(" result=");
   Serial.print(result_name(result));
   Serial.print(" delta_ms=");
-  Serial.println(song_ms - notes[best_note].time_ms);
+  Serial.print(song_ms - notes[best_note].time_ms);
+  Serial.print(" score=");
+  Serial.print(game_score);
+  Serial.print(" combo=");
+  Serial.print(game_combo);
+  Serial.print(" distance_cm=");
+  Serial.println((int)game_sensor_cm[lane]);
+  send_score_line();
 }
 
 void update_sensors() {
@@ -397,6 +531,19 @@ void check_for_misses() {
       notes[i].was_missed = true;
       game_combo = 0;
       start_lane_flash(notes[i].lane, result_miss);
+      Serial.print("GAME MISS lane=");
+      Serial.print(notes[i].lane);
+      Serial.print(" name=");
+      Serial.print(lane_name_for_game(notes[i].lane));
+      Serial.print(" note_ms=");
+      Serial.print(notes[i].time_ms);
+      Serial.print(" song_ms=");
+      Serial.print(song_ms);
+      Serial.print(" score=");
+      Serial.print(game_score);
+      Serial.print(" combo=");
+      Serial.println(game_combo);
+      send_score_line();
     }
   }
 }
@@ -475,6 +622,10 @@ void render_countdown() {
 }
 
 void render_game() {
+  if (!game_leds_enabled) {
+    return;
+  }
+
   game_pixels.clear();
 
   for (int lane = 0; lane < game_ring_count; lane++) {
@@ -535,7 +686,8 @@ void render_game() {
 void stop_game() {
   game_mode = mode_ready;
   send_board_stop();
-  Serial.println("game stopped");
+  Serial.println("GAME STOP mode=ready");
+  send_game_telemetry(true);
 }
 
 void start_countdown() {
@@ -556,7 +708,17 @@ void start_countdown() {
   }
 
   send_board_start(countdown_length_ms);
-  Serial.println("countdown started");
+  Serial.print("GAME COUNTDOWN delay_ms=");
+  Serial.print(countdown_length_ms);
+  Serial.print(" notes=");
+  Serial.print(note_count);
+  Serial.print(" song_end_ms=");
+  Serial.print(song_end_time_ms);
+  Serial.print(" score=");
+  Serial.print(game_score);
+  Serial.print(" combo=");
+  Serial.println(game_combo);
+  send_game_telemetry(true);
 }
 
 void update_countdown() {
@@ -567,7 +729,11 @@ void update_countdown() {
   if (millis() >= scheduled_song_start_time) {
     game_mode = mode_playing;
     game_start_time = scheduled_song_start_time;
-    Serial.println("game started");
+    Serial.print("GAME START song_ms=0 notes=");
+    Serial.print(note_count);
+    Serial.print(" song_end_ms=");
+    Serial.println(song_end_time_ms);
+    send_game_telemetry(true);
   }
 }
 
@@ -583,10 +749,13 @@ void finish_song_if_needed() {
 
   game_mode = mode_finished;
   send_board_stop();
-  Serial.print("song finished score=");
+  Serial.print("GAME FINISH song_ms=");
+  Serial.print(song_ms);
+  Serial.print(" score=");
   Serial.print(game_score);
   Serial.print(" combo=");
   Serial.println(game_combo);
+  send_game_telemetry(true);
 }
 
 void handle_host_ready(const char* track_id) {
@@ -662,23 +831,36 @@ void handle_game_serial_input() {
 }  // namespace
 
 void setup_game_logic() {
-  game_pixels.begin();
-  game_pixels.setBrightness(game_brightness);
-  game_pixels.clear();
-  game_pixels.show();
+  if (game_leds_enabled) {
+    game_pixels.begin();
+    game_pixels.setBrightness(game_brightness);
+    game_pixels.clear();
+    game_pixels.show();
+  }
 
   load_song_chart();
   game_mode = mode_ready;
 
   announce_player_state();
+  Serial.print("GAME READY notes=");
+  Serial.print(note_count);
+  Serial.print(" song_end_ms=");
+  Serial.print(song_end_time_ms);
+  Serial.print(" leds_enabled=");
+  Serial.println(game_leds_enabled ? 1 : 0);
   Serial.println("game ready");
   Serial.println("commands: s=start, x=stop, p=resend player state");
   Serial.println("host commands: HOST START_GAME, HOST STOP_GAME, HOST REQUEST_STATE");
+  send_game_telemetry(true);
 }
 
 void loop_game_logic() {
   handle_game_serial_input();
   update_countdown();
+
+  if (game_mode == mode_countdown || game_mode == mode_playing) {
+    send_game_telemetry(false);
+  }
 
   if (game_mode == mode_playing) {
     update_sensors();
