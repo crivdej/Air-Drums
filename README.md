@@ -32,7 +32,7 @@ PC to board:
 
 1. Flash the board and connect it over USB.
 2. Keep the playable backing track at `pc_tracks/steves_lava_chicken.wav`.
-3. Install the one Python dependency: `pip install pyserial`
+3. Install the one Python dependency: `pip install pyserial` or `pip3 install pyserial`
 4. Run `python3 tools/serial_music_player.py --port /dev/cu.usbserial-XXXX`
 5. Type `start` in the player window.
 
