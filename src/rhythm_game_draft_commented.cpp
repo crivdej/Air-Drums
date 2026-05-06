@@ -15,7 +15,7 @@ constexpr int game_total_leds = game_ring_count * game_leds_per_ring;
 constexpr int game_led_data_pin = 15;
 constexpr int max_notes = 96;
 constexpr int serial_buffer_size = 96;
-constexpr bool game_leds_enabled = false;
+constexpr bool game_leds_enabled = true;
 constexpr bool game_oled_enabled = true;
 
 constexpr int lane_hihat = 0;
