@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import wave
+import shutil
 from pathlib import Path
 
 try:
@@ -98,6 +99,10 @@ def parse_int(value: str, fallback: int) -> int:
         return fallback
 
 
+def terminal_width() -> int:
+    return shutil.get_terminal_size((100, 24)).columns
+
+
 class PlayerState:
     def __init__(self, serial_port, tracks_dir: Path) -> None:
         self.serial_port = serial_port
@@ -126,7 +131,7 @@ class PlayerState:
 
     def print_line(self, text: str) -> None:
         with self.print_lock:
-            print("\r" + " " * 160 + "\r" + text, flush=True)
+            print(text, flush=True)
 
     def send_line(self, line: str) -> None:
         # every protocol message is a single newline-terminated line
@@ -415,18 +420,60 @@ def serial_status_line(state: PlayerState) -> str:
     )
 
 
-def run_no_board_mode(state: PlayerState, track_id: str, delay_ms: int) -> int:
+def compact_serial_status_line(state: PlayerState) -> str:
+    pc_ms = pc_elapsed_ms(state)
+    board_estimated_ms, _ = estimated_board_elapsed_ms(state)
+
+    with state.lock:
+        board_mode = state.board_mode
+        board_countdown_ms = state.board_countdown_ms
+        score = state.score
+        combo = state.combo
+        next_lane = state.next_lane
+        next_in_ms = state.next_in_ms
+
+    sync_text = "sync=n/a"
+    if pc_ms > 0 and board_estimated_ms > 0:
+        sync_text = f"sync={pc_ms - board_estimated_ms:+d}ms"
+
+    next_text = "next=none"
+    if next_in_ms >= 0:
+        next_text = f"next={next_lane} {next_in_ms}ms"
+    if board_countdown_ms > 0:
+        next_text = f"countdown={board_countdown_ms}ms"
+
+    return f"[status] {progress_line(state)} | {board_mode} | {sync_text} | score={score} combo={combo} | {next_text}"
+
+
+def print_status(state: PlayerState, live_status: bool, width: int = 100) -> None:
+    line = serial_status_line(state) if live_status else compact_serial_status_line(state)
+    if len(line) > width:
+        line = line[: max(0, width - 3)] + "..."
+
+    with state.print_lock:
+        if live_status:
+            print(f"\r{line:<{width}}", end="", flush=True)
+        else:
+            print(line, flush=True)
+
+
+def run_no_board_mode(state: PlayerState, track_id: str, delay_ms: int, live_status: bool) -> int:
     # this mode lets us test the pc playback side without an esp32 connected
     state.handle_load(track_id)
     print("No-board mode: commands are start, stop, reload, quit", flush=True)
-    print("> ", end="", flush=True)
+    print("> ", end="" if live_status else "\n", flush=True)
+    next_status_time = time.monotonic()
+    width = min(terminal_width(), 160)
 
     try:
         while True:
             readable, _, _ = select.select([sys.stdin], [], [], 0.25)
 
             if not readable:
-                print(f"\r{progress_line(state):<80}", end="", flush=True)
+                now = time.monotonic()
+                if live_status or now >= next_status_time:
+                    print_status(state, live_status, width)
+                    next_status_time = now + 1.0
                 continue
 
             raw_command = sys.stdin.readline()
@@ -435,7 +482,8 @@ def run_no_board_mode(state: PlayerState, track_id: str, delay_ms: int) -> int:
             else:
                 command = raw_command.strip().lower()
 
-            print("\r" + " " * 80 + "\r", end="", flush=True)
+            if live_status:
+                print("\r" + " " * width + "\r", end="", flush=True)
 
             if command in ("", "start"):
                 state.handle_start(track_id, delay_ms)
@@ -450,7 +498,7 @@ def run_no_board_mode(state: PlayerState, track_id: str, delay_ms: int) -> int:
             else:
                 print("Unknown command. Use: start, stop, reload, quit", flush=True)
 
-            print("> ", end="", flush=True)
+            print("> ", end="" if live_status else "\n", flush=True)
     finally:
         state.stop_audio()
 
@@ -546,6 +594,11 @@ def main() -> int:
         default=3000,
         help="Start delay for --no-board mode. Default: 3000",
     )
+    parser.add_argument(
+        "--live-status",
+        action="store_true",
+        help="Redraw one live status line instead of printing persistent status lines.",
+    )
     args = parser.parse_args()
 
     tracks_dir = Path(args.tracks_dir).expanduser().resolve()
@@ -554,7 +607,7 @@ def main() -> int:
     if args.no_board:
         print(f"Using tracks folder: {tracks_dir}", flush=True)
         state = PlayerState(None, tracks_dir)
-        return run_no_board_mode(state, args.track_id, args.delay_ms)
+        return run_no_board_mode(state, args.track_id, args.delay_ms, args.live_status)
 
     if serial is None:
         print("pyserial is not installed. Run: pip install pyserial", file=sys.stderr)
@@ -569,6 +622,7 @@ def main() -> int:
     print(f"Using serial port: {port}", flush=True)
     print(f"Using tracks folder: {tracks_dir}", flush=True)
     print("Commands: start, stop, reload, quit", flush=True)
+    print("Status is persistent. Pass --live-status for one-line redraw mode.", flush=True)
 
     try:
         serial_port = serial.Serial(port, args.baud, timeout=0.25)
@@ -583,14 +637,18 @@ def main() -> int:
 
     reader = threading.Thread(target=read_serial_loop, args=(state,), daemon=True)
     reader.start()
+    next_status_time = time.monotonic()
+    width = min(terminal_width(), 160)
 
     try:
         while True:
             readable, _, _ = select.select([sys.stdin], [], [], 0.25)
 
             if not readable:
-                with state.print_lock:
-                    print(f"\r{serial_status_line(state):<160}", end="", flush=True)
+                now = time.monotonic()
+                if args.live_status or now >= next_status_time:
+                    print_status(state, args.live_status, width)
+                    next_status_time = now + 1.0
                 continue
 
             raw_command = sys.stdin.readline()
@@ -599,8 +657,9 @@ def main() -> int:
             else:
                 command = raw_command.strip().lower()
 
-            with state.print_lock:
-                print("\r" + " " * 160 + "\r", end="", flush=True)
+            if args.live_status:
+                with state.print_lock:
+                    print("\r" + " " * width + "\r", end="", flush=True)
 
             if command in ("", "start", "s"):
                 # keep manual testing simple by letting start mean "ask the board to fire the song cue"
