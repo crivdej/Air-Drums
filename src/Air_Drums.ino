@@ -12,7 +12,7 @@
 
 // ── neopixel ring test ──//
 const int led_data_pin = 23;
-const int ring_count = 1;
+const int ring_count = 3;
 const int leds_per_ring = 16;
 const int total_leds = ring_count * leds_per_ring;
 
