@@ -246,6 +246,8 @@ void loop_led_test() {
 #define DAC_PIN     26
 #define SAMPLE_RATE 16000
 
+constexpr unsigned long sensor_echo_timeout_us = 6000;
+
 volatile const uint8_t* current_sample = nullptr;
 volatile uint32_t sample_pos = 0;
 volatile uint32_t sample_len = 0;
@@ -264,10 +266,12 @@ void IRAM_ATTR onAudioTimer() {
 }
 
 void playDrum(const uint8_t* data, uint32_t length) {
+  noInterrupts();
   current_sample = nullptr;
   sample_pos = 0;
   sample_len = length;
   current_sample = data;
+  interrupts();
 }
 
 // ── Sensor pins ───//
@@ -381,8 +385,8 @@ long getDistance(int trig, int echo) {
   digitalWrite(trig, HIGH);
   delayMicroseconds(10);
   digitalWrite(trig, LOW);
-  long duration = pulseIn(echo, HIGH, 30000);
-  return duration * 0.034 / 2;
+  long duration = pulseIn(echo, HIGH, sensor_echo_timeout_us);
+  return duration / 58;
 }
 
 // Setup 
