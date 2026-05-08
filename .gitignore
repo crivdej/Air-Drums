@@ -19,3 +19,6 @@ charts/**/album.png_xbox
 charts/**/venue.milo_xbox
 charts/**/song.ogg
 charts/**/song.mogg
+
+# Auto-generated chart headers
+src/generated_charts/*.h
