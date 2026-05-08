@@ -9,6 +9,8 @@ import threading
 import time
 import wave
 import shutil
+from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
@@ -105,6 +107,55 @@ def terminal_width() -> int:
     return shutil.get_terminal_size((100, 24)).columns
 
 
+@dataclass(frozen=True)
+class ChartMetadata:
+    chart_id: str
+    difficulty: str
+    notes: int
+    song_end_ms: int
+    source_midi: str
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def discover_chart_metadata() -> dict[str, ChartMetadata]:
+    metadata: dict[str, ChartMetadata] = {}
+    charts_dir = repo_root() / "src" / "generated_charts"
+
+    for header_path in charts_dir.glob("*_chart.h"):
+        chart_id = header_path.name.removesuffix("_chart.h")
+        difficulty = "unknown"
+        source_midi = "unknown"
+        notes = 0
+        song_end_ms = 0
+
+        try:
+            for line in header_path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("// source midi:"):
+                    source_midi = stripped.split(":", 1)[1].strip()
+                elif stripped.startswith("// difficulty:"):
+                    difficulty = stripped.split(":", 1)[1].strip()
+                elif stripped.startswith("constexpr int ") and stripped.endswith(";"):
+                    tokens = stripped.removesuffix(";").split()
+                    if len(tokens) < 4:
+                        continue
+                    name = tokens[2]
+                    value = parse_int(tokens[-1], 0)
+                    if name.endswith("_note_count"):
+                        notes = value
+                    elif name.endswith("_song_end_ms"):
+                        song_end_ms = value
+        except OSError:
+            continue
+
+        metadata[chart_id] = ChartMetadata(chart_id, difficulty, notes, song_end_ms, source_midi)
+
+    return metadata
+
+
 def pygame_mixer_config(path: Path) -> tuple[int, int, int] | None:
     if pygame is None or path.suffix.lower() != ".wav":
         return None
@@ -126,11 +177,20 @@ def pygame_mixer_config(path: Path) -> tuple[int, int, int] | None:
 
 
 class PlayerState:
-    def __init__(self, serial_port, tracks_dir: Path) -> None:
+    def __init__(
+        self,
+        serial_port,
+        tracks_dir: Path,
+        charts: dict[str, ChartMetadata],
+        cli_mode: str,
+    ) -> None:
         self.serial_port = serial_port
         self.tracks_dir = tracks_dir
+        self.charts = charts
+        self.cli_mode = cli_mode
         self.current_track_id = ""
         self.current_track_path: Path | None = None
+        self.current_chart: ChartMetadata | None = None
         self.audio_process: subprocess.Popen | None = None
         self.audio_backend = "afplay"
         self.pygame_sound = None
@@ -153,12 +213,17 @@ class PlayerState:
         self.next_lane = "none"
         self.next_in_ms = -1
         self.last_game_event = "waiting for board"
+        self.recent_messages = deque(maxlen=8)
+        self.dashboard_mode = False
         self.lock = threading.Lock()
         self.print_lock = threading.Lock()
 
     def print_line(self, text: str) -> None:
         with self.print_lock:
-            print(text, flush=True)
+            timestamp = time.strftime("%H:%M:%S")
+            self.recent_messages.append(f"{timestamp} {text}")
+            if not self.dashboard_mode:
+                print(text, flush=True)
 
     def send_line(self, line: str) -> None:
         # every protocol message is a single newline-terminated line
@@ -282,14 +347,16 @@ class PlayerState:
         self.stop_audio()
 
         if track_path is None:
-            self.current_track_id = ""
+            self.current_track_id = track_id
             self.current_track_path = None
+            self.current_chart = self.charts.get(track_id)
             self.send_line(f"HOST ERROR missing_track {track_id}")
             self.print_line(f"Missing track: {track_id}")
             return
 
         self.current_track_id = track_id
         self.current_track_path = track_path
+        self.current_chart = self.charts.get(track_id)
         self.current_duration_seconds = audio_duration_seconds(track_path)
         backend = self.prepare_audio_backend(track_path)
         self.send_line(f"HOST READY {track_id}")
@@ -341,6 +408,24 @@ class PlayerState:
                 self.board_song_receive_time = received_time
             if "countdown_ms" in fields:
                 self.board_countdown_ms = parse_int(fields["countdown_ms"], self.board_countdown_ms)
+            if "notes" in fields and self.current_chart is not None:
+                notes = parse_int(fields["notes"], self.current_chart.notes)
+                self.current_chart = ChartMetadata(
+                    self.current_chart.chart_id,
+                    self.current_chart.difficulty,
+                    notes,
+                    self.current_chart.song_end_ms,
+                    self.current_chart.source_midi,
+                )
+            if "song_end_ms" in fields and self.current_chart is not None:
+                song_end_ms = parse_int(fields["song_end_ms"], self.current_chart.song_end_ms)
+                self.current_chart = ChartMetadata(
+                    self.current_chart.chart_id,
+                    self.current_chart.difficulty,
+                    self.current_chart.notes,
+                    song_end_ms,
+                    self.current_chart.source_midi,
+                )
             if "score" in fields:
                 self.score = parse_int(fields["score"], self.score)
             if "combo" in fields:
@@ -510,6 +595,8 @@ def serial_status_line(state: PlayerState) -> str:
         next_lane = state.next_lane
         next_in_ms = state.next_in_ms
         last_game_event = state.last_game_event
+        track_id = state.current_track_id or "(none)"
+        chart = state.current_chart
 
     sync_text = "sync=n/a"
     if pc_ms > 0 and board_estimated_ms > 0:
@@ -523,7 +610,9 @@ def serial_status_line(state: PlayerState) -> str:
         next_text = f"countdown={board_countdown_ms}ms"
 
     return (
-        f"{progress_line(state)} | board={board_mode} {board_song_ms}ms | "
+        f"{progress_line(state)} | mode={board_mode} board={board_song_ms}ms | "
+        f"track={track_id} chart={chart.chart_id if chart else '?'} "
+        f"difficulty={chart.difficulty if chart else '?'} | "
         f"{sync_text} | score={score} combo={combo} | {next_text} | {last_game_event}"
     )
 
@@ -553,23 +642,108 @@ def compact_serial_status_line(state: PlayerState) -> str:
     return f"[status] {progress_line(state)} | {board_mode} | {sync_text} | score={score} combo={combo} | {next_text}"
 
 
-def print_status(state: PlayerState, live_status: bool, width: int = 100) -> None:
-    line = serial_status_line(state) if live_status else compact_serial_status_line(state)
-    if len(line) > width:
-        line = line[: max(0, width - 3)] + "..."
+def trim_line(text: str, width: int) -> str:
+    if len(text) <= width:
+        return text
+    return text[: max(0, width - 3)] + "..."
+
+
+def dashboard_text(state: PlayerState, width: int) -> str:
+    pc_ms = pc_elapsed_ms(state)
+    board_estimated_ms, board_age_ms = estimated_board_elapsed_ms(state)
+
+    with state.lock:
+        board_mode = state.board_mode
+        board_song_ms = state.board_song_ms
+        board_countdown_ms = state.board_countdown_ms
+        score = state.score
+        combo = state.combo
+        next_lane = state.next_lane
+        next_in_ms = state.next_in_ms
+        last_game_event = state.last_game_event
+        track_id = state.current_track_id or "(none)"
+        track_file = state.current_track_path.name if state.current_track_path else "(none)"
+        backend = state.audio_backend
+        chart = state.current_chart
+
+    sync_text = "n/a"
+    if pc_ms > 0 and board_estimated_ms > 0:
+        sync_text = f"{pc_ms - board_estimated_ms:+d}ms (sample age {board_age_ms}ms)"
+
+    next_text = "none"
+    if next_in_ms >= 0:
+        next_text = f"{next_lane} in {next_in_ms}ms"
+    if board_countdown_ms > 0:
+        next_text = f"countdown {board_countdown_ms}ms"
+
+    chart_id = chart.chart_id if chart else "unknown"
+    difficulty = chart.difficulty if chart else "unknown"
+    notes = str(chart.notes) if chart and chart.notes else "unknown"
+    song_end = format_time((chart.song_end_ms / 1000.0) if chart else 0.0) if chart and chart.song_end_ms else "unknown"
+    source_midi = chart.source_midi if chart else "unknown"
+
+    lines = [
+        "Air-Drums PC Player",
+        "=" * min(width, 72),
+        f"CLI mode: {state.cli_mode}",
+        f"Board mode: {board_mode}",
+        f"Song chart: {chart_id}",
+        f"Difficulty: {difficulty}",
+        f"Track id: {track_id}",
+        f"Audio file: {track_file}",
+        f"Audio backend: {backend}",
+        f"Chart notes: {notes}",
+        f"Chart length: {song_end}",
+        f"Source: {source_midi}",
+        "",
+        f"Playback: {progress_line(state)}",
+        f"Board clock: {board_song_ms}ms",
+        f"PC/board sync: {sync_text}",
+        f"Score: {score}    Combo: {combo}",
+        f"Next: {next_text}",
+        f"Last event: {last_game_event}",
+        "",
+        "Commands: start/s, stop/x, next/n, prev/b, charts, chart <id|number>, reload/p, quit",
+        "Command > ",
+        "",
+        "Recent events:",
+    ]
 
     with state.print_lock:
-        if live_status:
-            print(f"\r{line:<{width}}", end="", flush=True)
+        messages = list(state.recent_messages)
+
+    if messages:
+        lines.extend(messages[-6:])
+    else:
+        lines.append("(waiting for events)")
+
+    return "\n".join(trim_line(line, width) for line in lines)
+
+
+def print_status(state: PlayerState, dashboard: bool, width: int = 100) -> None:
+    text = dashboard_text(state, width) if dashboard else compact_serial_status_line(state)
+    if not dashboard and len(text) > width:
+        text = text[: max(0, width - 3)] + "..."
+
+    with state.print_lock:
+        if dashboard:
+            print("\033[H\033[2J" + text, end="", flush=True)
         else:
-            print(line, flush=True)
+            print(text, flush=True)
 
 
-def run_no_board_mode(state: PlayerState, track_id: str, delay_ms: int, live_status: bool) -> int:
+def run_no_board_mode(state: PlayerState, track_id: str, delay_ms: int, dashboard: bool) -> int:
     # this mode lets us test the pc playback side without an esp32 connected
-    state.handle_load(track_id)
-    print("No-board mode: commands are start, stop, reload, quit", flush=True)
-    print("> ", end="" if live_status else "\n", flush=True)
+    state.dashboard_mode = dashboard
+    if dashboard:
+        print("\033[?25l", end="", flush=True)
+    chart_ids = sorted(state.charts)
+    current_track_id = track_id
+    if current_track_id not in state.charts and chart_ids:
+        current_track_id = chart_ids[0]
+    state.handle_load(current_track_id)
+    if not dashboard:
+        print("No-board mode: commands are start, stop, next, prev, charts, chart <id|number>, reload, quit", flush=True)
     next_status_time = time.monotonic()
     width = min(terminal_width(), 160)
 
@@ -579,8 +753,8 @@ def run_no_board_mode(state: PlayerState, track_id: str, delay_ms: int, live_sta
 
             if not readable:
                 now = time.monotonic()
-                if live_status or now >= next_status_time:
-                    print_status(state, live_status, width)
+                if dashboard or now >= next_status_time:
+                    print_status(state, dashboard, width)
                     next_status_time = now + 1.0
                 continue
 
@@ -590,25 +764,42 @@ def run_no_board_mode(state: PlayerState, track_id: str, delay_ms: int, live_sta
             else:
                 command = raw_command.strip().lower()
 
-            if live_status:
-                print("\r" + " " * width + "\r", end="", flush=True)
-
-            if command in ("", "start"):
-                state.handle_start(track_id, delay_ms)
+            if command in ("", "start", "s"):
+                state.handle_start(current_track_id, delay_ms)
             elif command == "stop":
                 state.stop_audio()
-                print("Stopped playback", flush=True)
-            elif command == "reload":
-                state.handle_load(track_id)
+                state.print_line("Stopped playback")
+            elif command in ("next", "n") and chart_ids:
+                current_index = chart_ids.index(current_track_id) if current_track_id in chart_ids else 0
+                current_track_id = chart_ids[(current_index + 1) % len(chart_ids)]
+                state.handle_load(current_track_id)
+            elif command in ("prev", "previous", "b") and chart_ids:
+                current_index = chart_ids.index(current_track_id) if current_track_id in chart_ids else 0
+                current_track_id = chart_ids[(current_index - 1) % len(chart_ids)]
+                state.handle_load(current_track_id)
+            elif command == "charts":
+                state.print_line("Charts: " + ", ".join(f"{index + 1}:{chart_id}" for index, chart_id in enumerate(chart_ids)))
+            elif command.startswith("chart "):
+                requested = command.split(maxsplit=1)[1]
+                if requested.isdigit() and 1 <= int(requested) <= len(chart_ids):
+                    current_track_id = chart_ids[int(requested) - 1]
+                    state.handle_load(current_track_id)
+                elif requested in state.charts:
+                    current_track_id = requested
+                    state.handle_load(current_track_id)
+                else:
+                    state.print_line(f"Unknown chart: {requested}")
+            elif command in ("reload", "p"):
+                state.handle_load(current_track_id)
             elif command == "quit":
                 state.stop_audio()
                 return 0
             else:
-                print("Unknown command. Use: start, stop, reload, quit", flush=True)
-
-            print("> ", end="" if live_status else "\n", flush=True)
+                state.print_line("Unknown command. Use: start, stop, next, prev, charts, chart <id|number>, reload, quit")
     finally:
         state.stop_audio()
+        if dashboard:
+            print("\033[?25h", flush=True)
 
 
 def read_serial_loop(state: PlayerState) -> None:
@@ -693,8 +884,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--track-id",
-        default="steves_lava_chicken",
-        help="Track id to load in --no-board mode. Default: steves_lava_chicken",
+        default="takefive",
+        help="Track id to load in --no-board mode. Default: takefive",
     )
     parser.add_argument(
         "--delay-ms",
@@ -705,17 +896,25 @@ def main() -> int:
     parser.add_argument(
         "--live-status",
         action="store_true",
-        help="Redraw one live status line instead of printing persistent status lines.",
+        help="Deprecated; the persistent dashboard is now the default.",
+    )
+    parser.add_argument(
+        "--log-status",
+        action="store_true",
+        help="Print scrolling status lines instead of using the persistent dashboard.",
     )
     args = parser.parse_args()
 
     tracks_dir = Path(args.tracks_dir).expanduser().resolve()
     tracks_dir.mkdir(parents=True, exist_ok=True)
+    charts = discover_chart_metadata()
+    dashboard = not args.log_status
 
     if args.no_board:
-        print(f"Using tracks folder: {tracks_dir}", flush=True)
-        state = PlayerState(None, tracks_dir)
-        return run_no_board_mode(state, args.track_id, args.delay_ms, args.live_status)
+        if not dashboard:
+            print(f"Using tracks folder: {tracks_dir}", flush=True)
+        state = PlayerState(None, tracks_dir, charts, "no-board")
+        return run_no_board_mode(state, args.track_id, args.delay_ms, dashboard)
 
     if serial is None:
         platformio_python = Path.home() / ".platformio" / "penv" / "bin" / "python"
@@ -732,10 +931,11 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    print(f"Using serial port: {port}", flush=True)
-    print(f"Using tracks folder: {tracks_dir}", flush=True)
-    print("Commands: start, stop, reload, quit", flush=True)
-    print("Status is persistent. Pass --live-status for one-line redraw mode.", flush=True)
+    if not dashboard:
+        print(f"Using serial port: {port}", flush=True)
+        print(f"Using tracks folder: {tracks_dir}", flush=True)
+        print("Commands: start, stop, next, prev, charts, chart <id|number>, reload, quit", flush=True)
+        print("Pass without --log-status for the persistent dashboard.", flush=True)
 
     try:
         serial_port = serial.Serial(port, args.baud, timeout=0.25)
@@ -743,7 +943,12 @@ def main() -> int:
         print(f"Could not open serial port: {exc}", file=sys.stderr)
         return 1
 
-    state = PlayerState(serial_port, tracks_dir)
+    state = PlayerState(serial_port, tracks_dir, charts, "serial board")
+    state.dashboard_mode = dashboard
+    if dashboard:
+        print("\033[?25l", end="", flush=True)
+    state.print_line(f"Using serial port: {port}")
+    state.print_line(f"Using tracks folder: {tracks_dir}")
     # ask the board to identify itself and resend the current track selection
     state.send_line("HOST HELLO")
     state.send_line("HOST REQUEST_STATE")
@@ -759,8 +964,8 @@ def main() -> int:
 
             if not readable:
                 now = time.monotonic()
-                if args.live_status or now >= next_status_time:
-                    print_status(state, args.live_status, width)
+                if dashboard or now >= next_status_time:
+                    print_status(state, dashboard, width)
                     next_status_time = now + 1.0
                 continue
 
@@ -770,15 +975,20 @@ def main() -> int:
             else:
                 command = raw_command.strip().lower()
 
-            if args.live_status:
-                with state.print_lock:
-                    print("\r" + " " * width + "\r", end="", flush=True)
-
             if command in ("", "start", "s"):
                 # keep manual testing simple by letting start mean "ask the board to fire the song cue"
                 state.send_line("HOST START_GAME")
             elif command in ("stop", "x"):
                 state.send_line("HOST STOP_GAME")
+            elif command in ("next", "n"):
+                state.send_line("HOST NEXT_CHART")
+            elif command in ("prev", "previous", "b"):
+                state.send_line("HOST PREV_CHART")
+            elif command == "charts":
+                state.send_line("HOST LIST_CHARTS")
+            elif command.startswith("chart "):
+                requested = command.split(maxsplit=1)[1]
+                state.send_line(f"HOST SELECT_CHART {requested}")
             elif command in ("reload", "p"):
                 state.send_line("HOST REQUEST_STATE")
             elif command == "quit":
@@ -787,10 +997,12 @@ def main() -> int:
                 print()
                 return 0
             else:
-                state.print_line("Unknown command. Use: start, stop, reload, quit")
+                state.print_line("Unknown command. Use: start, stop, next, prev, charts, chart <id|number>, reload, quit")
     finally:
         state.stop_audio()
         serial_port.close()
+        if dashboard:
+            print("\033[?25h", flush=True)
 
 
 if __name__ == "__main__":
