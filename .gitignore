@@ -12,6 +12,10 @@ __pycache__/
 pc_tracks/*
 !pc_tracks/.gitkeep
 
-# Extracted chart audio
+# Files extracted from RB3CON packages
+charts/**/notes.mid
+charts/**/metadata.dta
+charts/**/album.png_xbox
+charts/**/venue.milo_xbox
 charts/**/song.ogg
 charts/**/song.mogg
