@@ -127,7 +127,9 @@ The script tries to find the ESP32 serial port. If it picks the wrong one, pass 
 python3 tools/serial_music_player.py --port /dev/cu.usbserial-XXXX
 ```
 
-The player shows a small dashboard with the current chart, score, combo, timing sync, and recent hits or misses. For plain scrolling logs instead:
+The player shows a small dashboard with the current chart, score, combo, timing sync, and recent hits or misses. Score is now a chart-normalized percent: each note can earn up to 100 timing-quality points, and the song score is the percent of possible chart quality earned. The dashboard also reports grade, hit rate, max combo, extra hits, average timing error, and perfect/great/good/bad counts so the end of a song explains what went well and what needs work.
+
+For plain scrolling logs instead:
 
 ```bash
 python3 tools/serial_music_player.py --log-status
@@ -214,19 +216,9 @@ python3 tools/chartloader.py --onyx /path/to/onyx
 
 ## Adding The New Chart To The Firmware
 
-`tools/chartloader.py` makes the chart header, but it does not edit the C++ chart list for you.
-
-In `src/rhythm_game_draft_commented.cpp`, add the include:
-
-```cpp
-#include "generated_charts/my_song_chart.h"
-```
-
-Then add the chart to `song_charts[]`:
-
-```cpp
-{ "my_song", my_song_notes, my_song_note_count, my_song_song_end_ms },
-```
+`tools/chartloader.py` makes the chart header and refreshes the firmware chart registry automatically.
+PlatformIO also refreshes the registry before every build, so any `src/generated_charts/*_chart.h`
+file is included in the ESP32 chart list by default.
 
 Upload the firmware again:
 
@@ -255,7 +247,13 @@ That writes:
 src/generated_charts/my_song_chart.h
 ```
 
-Then add the include and `song_charts[]` entry the same way as above. You also need to provide your own audio file:
+Then refresh the generated firmware registry:
+
+```bash
+python3 tools/generate_chart_registry.py
+```
+
+You also need to provide your own audio file:
 
 ```text
 pc_tracks/my_song.wav
