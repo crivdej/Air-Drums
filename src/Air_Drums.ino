@@ -738,7 +738,7 @@ DrumSensor sensors[NUM_SENSORS] = {
   { TRIG3, ECHO3, "SNARE",  snare_data, snare_length, false, 0 },
 };
 
-const char active_track_id[] = "steves_lava_chicken";
+const char active_track_id[] = "takefive";
 const int pc_song_start_delay_ms = 3000;
 
 // this small buffer collects one serial command at a time from the pc player
