@@ -8,3 +8,10 @@ ELROY.md
 SIMNOTES.md
 __pycache__/
 *.pyc
+# Local playable song audio
+pc_tracks/*
+!pc_tracks/.gitkeep
+
+# Extracted chart audio
+charts/**/song.ogg
+charts/**/song.mogg
