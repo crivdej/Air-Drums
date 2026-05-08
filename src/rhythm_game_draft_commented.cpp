@@ -4,13 +4,7 @@
 #include <cstring>
 
 #include "air_drums_shared.h"
-#include "generated_charts/boysdontcry_chart.h"
-#include "generated_charts/cruelangelsthesis_chart.h"
-#include "generated_charts/expertinadyingfield_chart.h"
-#include "generated_charts/steves_lava_chicken_chart.h"
-#include "generated_charts/steves_lava_chicken_super_easy_chart.h"
-#include "generated_charts/takefive_chart.h"
-#include "generated_charts/tusk_chart.h"
+#include "generated_charts/chart_registry.h"
 #include "rhythm_game.h"
 
 namespace {
@@ -57,13 +51,7 @@ struct SongChart {
 };
 
 const SongChart song_charts[] = {
-  { "takefive", takefive_notes, takefive_note_count, takefive_song_end_ms },
-  { "boysdontcry", boysdontcry_notes, boysdontcry_note_count, boysdontcry_song_end_ms },
-  { "cruelangelsthesis", cruelangelsthesis_notes, cruelangelsthesis_note_count, cruelangelsthesis_song_end_ms },
-  { "expertinadyingfield", expertinadyingfield_notes, expertinadyingfield_note_count, expertinadyingfield_song_end_ms },
-  { "tusk", tusk_notes, tusk_note_count, tusk_song_end_ms },
-  { "steves_lava_chicken", steves_lava_chicken_notes, steves_lava_chicken_note_count, steves_lava_chicken_song_end_ms },
-  { "steves_lava_chicken_super_easy", steves_lava_chicken_super_easy_notes, steves_lava_chicken_super_easy_note_count, steves_lava_chicken_super_easy_song_end_ms },
+AIR_DRUMS_SONG_CHARTS
 };
 
 constexpr int song_chart_count = sizeof(song_charts) / sizeof(song_charts[0]);
@@ -85,6 +73,16 @@ int max_hand_cm = 25;
 
 int game_score = 0;
 int game_combo = 0;
+int game_max_combo = 0;
+int game_judged_notes = 0;
+int game_hit_notes = 0;
+int game_missed_notes = 0;
+int game_extra_hits = 0;
+int game_perfect_notes = 0;
+int game_great_notes = 0;
+int game_good_notes = 0;
+int game_bad_notes = 0;
+long game_abs_delta_total_ms = 0;
 int game_hit_lockout_ms = 350;
 int quick_note_lockout_ms = 120;
 int countdown_length_ms = 3000;
@@ -240,11 +238,85 @@ int next_note_index(long song_ms) {
   return -1;
 }
 
+int percent_rounded(long value, long maximum) {
+  if (maximum <= 0) {
+    return 0;
+  }
+
+  return (int)((value * 100L + maximum / 2L) / maximum);
+}
+
+int chart_score_percent() {
+  return percent_rounded((long)game_score, (long)note_count * 100L);
+}
+
+int judged_quality_percent() {
+  return percent_rounded((long)game_score, (long)game_judged_notes * 100L);
+}
+
+int hit_rate_percent() {
+  return percent_rounded((long)game_hit_notes, (long)note_count);
+}
+
+int average_hit_delta_ms() {
+  if (game_hit_notes <= 0) {
+    return 0;
+  }
+
+  return (int)((game_abs_delta_total_ms + game_hit_notes / 2L) / game_hit_notes);
+}
+
+const char* performance_grade() {
+  int score = chart_score_percent();
+
+  if (score >= 97) {
+    return "S+";
+  }
+
+  if (score >= 93) {
+    return "S";
+  }
+
+  if (score >= 90) {
+    return "A";
+  }
+
+  if (score >= 80) {
+    return "B";
+  }
+
+  if (score >= 70) {
+    return "C";
+  }
+
+  if (score >= 60) {
+    return "D";
+  }
+
+  return "F";
+}
+
 void send_score_line() {
   Serial.print("GAME SCORE score=");
-  Serial.print(game_score);
+  Serial.print(chart_score_percent());
+  Serial.print(" quality_pct=");
+  Serial.print(judged_quality_percent());
   Serial.print(" combo=");
-  Serial.println(game_combo);
+  Serial.print(game_combo);
+  Serial.print(" max_combo=");
+  Serial.print(game_max_combo);
+  Serial.print(" hits=");
+  Serial.print(game_hit_notes);
+  Serial.print(" misses=");
+  Serial.print(game_missed_notes);
+  Serial.print(" extras=");
+  Serial.print(game_extra_hits);
+  Serial.print(" hit_rate_pct=");
+  Serial.print(hit_rate_percent());
+  Serial.print(" avg_delta_ms=");
+  Serial.print(average_hit_delta_ms());
+  Serial.print(" grade=");
+  Serial.println(performance_grade());
 }
 
 void send_game_telemetry(bool force_send) {
@@ -280,9 +352,25 @@ void send_game_telemetry(bool force_send) {
   Serial.print(" countdown_ms=");
   Serial.print(countdown_ms);
   Serial.print(" score=");
-  Serial.print(game_score);
+  Serial.print(chart_score_percent());
+  Serial.print(" quality_pct=");
+  Serial.print(judged_quality_percent());
   Serial.print(" combo=");
   Serial.print(game_combo);
+  Serial.print(" max_combo=");
+  Serial.print(game_max_combo);
+  Serial.print(" hits=");
+  Serial.print(game_hit_notes);
+  Serial.print(" misses=");
+  Serial.print(game_missed_notes);
+  Serial.print(" extras=");
+  Serial.print(game_extra_hits);
+  Serial.print(" hit_rate_pct=");
+  Serial.print(hit_rate_percent());
+  Serial.print(" avg_delta_ms=");
+  Serial.print(average_hit_delta_ms());
+  Serial.print(" grade=");
+  Serial.print(performance_grade());
   Serial.print(" next_lane=");
   Serial.print(next_lane);
   Serial.print(" next_name=");
@@ -454,6 +542,21 @@ void play_local_drum_for_lane(int lane) {
   playDrum(sensors[lane].sample, sensors[lane].sampleLen);
 }
 
+void reset_performance_stats() {
+  game_score = 0;
+  game_combo = 0;
+  game_max_combo = 0;
+  game_judged_notes = 0;
+  game_hit_notes = 0;
+  game_missed_notes = 0;
+  game_extra_hits = 0;
+  game_perfect_notes = 0;
+  game_great_notes = 0;
+  game_good_notes = 0;
+  game_bad_notes = 0;
+  game_abs_delta_total_ms = 0;
+}
+
 void assign_note_color_slots() {
   int last_note_for_lane[game_ring_count] = {-1, -1, -1};
   close_color_note_count = 0;
@@ -495,6 +598,7 @@ void load_song_chart() {
   note_count = 0;
   first_pending_note = 0;
   close_color_note_count = 0;
+  reset_performance_stats();
 
   for (int i = 0; i < chart.note_count && i < max_notes; i++) {
     notes[note_count++] = {
@@ -564,15 +668,15 @@ int score_for_result(int result) {
   }
 
   if (result == result_great) {
-    return 80;
+    return 90;
   }
 
   if (result == result_good) {
-    return 60;
+    return 75;
   }
 
   if (result == result_bad) {
-    return 25;
+    return 50;
   }
 
   return 0;
@@ -616,6 +720,29 @@ int result_from_delta(int abs_delta) {
   }
 
   return result_miss;
+}
+
+void record_note_result(int result, int abs_delta_ms) {
+  game_judged_notes += 1;
+
+  if (result == result_miss) {
+    game_missed_notes += 1;
+    return;
+  }
+
+  game_hit_notes += 1;
+  game_score += score_for_result(result);
+  game_abs_delta_total_ms += abs_delta_ms;
+
+  if (result == result_perfect) {
+    game_perfect_notes += 1;
+  } else if (result == result_great) {
+    game_great_notes += 1;
+  } else if (result == result_good) {
+    game_good_notes += 1;
+  } else if (result == result_bad) {
+    game_bad_notes += 1;
+  }
 }
 
 int find_best_note_for_lane(int lane, long song_ms, int* best_abs_delta) {
@@ -698,6 +825,7 @@ bool handle_hit(int lane) {
 
   if (best_note == -1) {
     game_combo = 0;
+    game_extra_hits += 1;
     last_note_result = result_miss;
     last_note_lane = lane;
     last_note_delta_ms = 0;
@@ -710,9 +838,11 @@ bool handle_hit(int lane) {
     Serial.print(" local_ms=");
     Serial.print(song_ms);
     Serial.print(" result=miss delta_ms=none score=");
-    Serial.print(game_score);
+    Serial.print(chart_score_percent());
     Serial.print(" combo=");
     Serial.print(game_combo);
+    Serial.print(" extras=");
+    Serial.print(game_extra_hits);
     Serial.print(" distance_cm=");
     Serial.println((int)game_sensor_cm[lane]);
     send_score_line();
@@ -723,8 +853,11 @@ bool handle_hit(int lane) {
   int result = result_from_delta(best_abs_delta);
   notes[best_note].was_hit = true;
   advance_first_pending_note();
-  game_score += score_for_result(result);
+  record_note_result(result, best_abs_delta);
   game_combo += 1;
+  if (game_combo > game_max_combo) {
+    game_max_combo = game_combo;
+  }
   last_note_result = result;
   last_note_lane = lane;
   last_note_delta_ms = song_ms - notes[best_note].time_ms;
@@ -744,9 +877,13 @@ bool handle_hit(int lane) {
   Serial.print(" delta_ms=");
   Serial.print(song_ms - notes[best_note].time_ms);
   Serial.print(" score=");
-  Serial.print(game_score);
+  Serial.print(chart_score_percent());
+  Serial.print(" quality_pct=");
+  Serial.print(judged_quality_percent());
   Serial.print(" combo=");
   Serial.print(game_combo);
+  Serial.print(" max_combo=");
+  Serial.print(game_max_combo);
   Serial.print(" distance_cm=");
   Serial.println((int)game_sensor_cm[lane]);
   send_score_line();
@@ -826,6 +963,7 @@ void check_for_misses() {
 
     if (song_ms > notes[i].time_ms + miss_window_ms) {
       notes[i].was_missed = true;
+      record_note_result(result_miss, 0);
       game_combo = 0;
       last_note_result = result_miss;
       last_note_lane = notes[i].lane;
@@ -841,9 +979,11 @@ void check_for_misses() {
       Serial.print(" song_ms=");
       Serial.print(song_ms);
       Serial.print(" score=");
-      Serial.print(game_score);
+      Serial.print(chart_score_percent());
       Serial.print(" combo=");
-      Serial.println(game_combo);
+      Serial.print(game_combo);
+      Serial.print(" misses=");
+      Serial.println(game_missed_notes);
       send_score_line();
       request_oled_draw();
     } else {
@@ -1104,7 +1244,7 @@ void draw_oled_status(bool force_draw) {
   }
 
   game_oled.setTextAlignment(TEXT_ALIGN_LEFT);
-  snprintf(line, sizeof(line), "score %d", game_score);
+  snprintf(line, sizeof(line), "score %d%%", chart_score_percent());
   game_oled.drawString(0, 21, line);
 
   snprintf(line, sizeof(line), "combo %d", game_combo);
@@ -1126,15 +1266,19 @@ void draw_oled_status(bool force_draw) {
   }
 
   int next_note = next_note_index(song_ms);
-  if (next_note >= 0 && game_mode == mode_playing) {
+  if (game_mode == mode_finished) {
+    snprintf(line, sizeof(line), "%s hit %d%% avg %dms",
+             performance_grade(),
+             hit_rate_percent(),
+             average_hit_delta_ms());
+    game_oled.drawString(0, 47, line);
+  } else if (next_note >= 0 && game_mode == mode_playing) {
     snprintf(line, sizeof(line), "next %s in %ldms",
              short_lane_name(notes[next_note].lane),
              notes[next_note].time_ms - song_ms);
     game_oled.drawString(0, 47, line);
   } else if (game_mode == mode_ready) {
     game_oled.drawString(0, 47, active_track_id);
-  } else if (game_mode == mode_finished) {
-    game_oled.drawString(0, 47, "song finished");
   } else {
     game_oled.drawString(0, 47, active_track_id);
   }
@@ -1156,8 +1300,7 @@ void start_countdown() {
   request_led_draw();
   countdown_start_time = millis();
   scheduled_song_start_time = countdown_start_time + countdown_length_ms;
-  game_score = 0;
-  game_combo = 0;
+  reset_performance_stats();
   first_pending_note = 0;
   last_note_result = result_miss;
   last_note_lane = -1;
@@ -1182,7 +1325,7 @@ void start_countdown() {
   Serial.print(" song_end_ms=");
   Serial.print(song_end_time_ms);
   Serial.print(" score=");
-  Serial.print(game_score);
+  Serial.print(chart_score_percent());
   Serial.print(" combo=");
   Serial.println(game_combo);
   send_game_telemetry(true);
@@ -1222,9 +1365,33 @@ void finish_song_if_needed() {
   Serial.print("GAME FINISH song_ms=");
   Serial.print(song_ms);
   Serial.print(" score=");
-  Serial.print(game_score);
+  Serial.print(chart_score_percent());
+  Serial.print(" quality_pct=");
+  Serial.print(judged_quality_percent());
   Serial.print(" combo=");
-  Serial.println(game_combo);
+  Serial.print(game_combo);
+  Serial.print(" max_combo=");
+  Serial.print(game_max_combo);
+  Serial.print(" hits=");
+  Serial.print(game_hit_notes);
+  Serial.print(" misses=");
+  Serial.print(game_missed_notes);
+  Serial.print(" extras=");
+  Serial.print(game_extra_hits);
+  Serial.print(" perfect=");
+  Serial.print(game_perfect_notes);
+  Serial.print(" great=");
+  Serial.print(game_great_notes);
+  Serial.print(" good=");
+  Serial.print(game_good_notes);
+  Serial.print(" bad=");
+  Serial.print(game_bad_notes);
+  Serial.print(" hit_rate_pct=");
+  Serial.print(hit_rate_percent());
+  Serial.print(" avg_delta_ms=");
+  Serial.print(average_hit_delta_ms());
+  Serial.print(" grade=");
+  Serial.println(performance_grade());
   send_game_telemetry(true);
   draw_oled_status(true);
 }
