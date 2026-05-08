@@ -20,6 +20,7 @@ const int led_serial_buffer_size = 96;
 int brightness = 35;
 int hit_pixel[ring_count] = {0};
 int ring_offset[ring_count] = {0};
+int physical_ring_for_lane[ring_count] = {0, 2, 1};
 
 int moving_pixel = 0;
 int selected_ring = -1; // -1 means all rings
@@ -47,7 +48,7 @@ int wrap_pixel(int pixel) {
 
 int get_real_pixel(int lane, int logical_pixel) {
   int fixed_pixel = wrap_pixel(logical_pixel + ring_offset[lane]);
-  return lane * leds_per_ring + fixed_pixel;
+  return physical_ring_for_lane[lane] * leds_per_ring + fixed_pixel;
 }
 
 uint32_t make_color_smaller(uint32_t color, int percent) {
@@ -304,9 +305,9 @@ void print_led_status() {
     Serial.print("LED RING lane=");
     Serial.print(lane);
     Serial.print(" first_pixel=");
-    Serial.print(lane * leds_per_ring);
+    Serial.print(physical_ring_for_lane[lane] * leds_per_ring);
     Serial.print(" last_pixel=");
-    Serial.print((lane + 1) * leds_per_ring - 1);
+    Serial.print((physical_ring_for_lane[lane] + 1) * leds_per_ring - 1);
     Serial.print(" hit_pixel=");
     Serial.print(hit_pixel[lane]);
     Serial.print(" offset=");

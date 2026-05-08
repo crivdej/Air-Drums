@@ -101,6 +101,7 @@ unsigned long next_allowed_game_hit_time[game_ring_count] = {0, 0, 0};
 
 int game_hit_pixel[game_ring_count] = {0, 0, 0};
 int game_ring_offset[game_ring_count] = {0, 0, 0};
+int game_physical_ring_for_lane[game_ring_count] = {0, 2, 1};
 int sensor_lane_to_read = 0;
 int sensor_gap_ms = 8;
 int flash_result[game_ring_count] = {result_miss, result_miss, result_miss};
@@ -395,7 +396,7 @@ int game_wrap_pixel(int pixel) {
 
 int game_real_pixel(int lane, int logical_pixel) {
   int fixed_pixel = game_wrap_pixel(logical_pixel + game_ring_offset[lane]);
-  return lane * game_leds_per_ring + fixed_pixel;
+  return game_physical_ring_for_lane[lane] * game_leds_per_ring + fixed_pixel;
 }
 
 uint32_t game_color(int red, int green, int blue) {
