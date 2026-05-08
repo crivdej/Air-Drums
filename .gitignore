@@ -8,3 +8,17 @@ ELROY.md
 SIMNOTES.md
 __pycache__/
 *.pyc
+# Local playable song audio
+pc_tracks/*
+!pc_tracks/.gitkeep
+
+# Files extracted from RB3CON packages
+charts/**/notes.mid
+charts/**/metadata.dta
+charts/**/album.png_xbox
+charts/**/venue.milo_xbox
+charts/**/song.ogg
+charts/**/song.mogg
+
+# Auto-generated chart headers
+src/generated_charts/*.h

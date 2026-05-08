@@ -1,0 +1,205 @@
+Using serial port: /dev/cu.usbserial-110
+Starting NeoPixel diagnostic suite.
+
+CHECK STATUS: Board should report pin=23, rings=3, total_leds=48.
+18:42:04.693 HOST  STATUS
+18:42:04.707 BOARD LED STATUS pin=23 rings=3 leds_per_ring=16 total_leds=48 brightness=35 auto=1 selected_ring=-1 move_gap_ms=90 moving_pixel=4
+18:42:04.712 BOARD LED RING lane=0 first_pixel=0 last_pixel=15 hit_pixel=0 offset=0
+18:42:04.720 BOARD LED RING lane=1 first_pixel=16 last_pixel=31 hit_pixel=0 offset=0
+18:42:04.727 BOARD LED RING lane=2 first_pixel=32 last_pixel=47 hit_pixel=0 offset=0
+18:42:04.727 BOARD LED OK STATUS
+
+CHECK WIRING: Ring 0 should be red, ring 1 green, ring 2 blue.
+18:42:05.545 HOST  WIRING
+18:42:05.552 BOARD LED OK WIRING
+
+CHECK COLOR RED ALL: All rings should be red. Wrong color means color-order/data issue.
+18:42:09.642 HOST  COLOR RED ALL
+18:42:09.650 BOARD LED OK COLOR
+
+CHECK COLOR GREEN ALL: All rings should be green.
+18:42:11.685 HOST  COLOR GREEN ALL
+18:42:11.693 BOARD LED OK COLOR
+
+CHECK COLOR BLUE ALL: All rings should be blue.
+18:42:13.737 HOST  COLOR BLUE ALL
+18:42:13.746 BOARD LED OK COLOR
+
+CHECK WALK ALL 70: One pixel should walk through ring 0, then 1, then 2.
+18:42:15.785 HOST  WALK ALL 70
+18:42:15.793 BOARD LED TEST WALK start target=-1 delay_ms=70
+18:42:15.797 BOARD LED STEP ring=0 logical_pixel=0 physical_pixel=0
+18:42:15.868 BOARD LED STEP ring=0 logical_pixel=1 physical_pixel=1
+18:42:15.940 BOARD LED STEP ring=0 logical_pixel=2 physical_pixel=2
+18:42:16.012 BOARD LED STEP ring=0 logical_pixel=3 physical_pixel=3
+18:42:16.084 BOARD LED STEP ring=0 logical_pixel=4 physical_pixel=4
+18:42:16.156 BOARD LED STEP ring=0 logical_pixel=5 physical_pixel=5
+18:42:16.228 BOARD LED STEP ring=0 logical_pixel=6 physical_pixel=6
+18:42:16.300 BOARD LED STEP ring=0 logical_pixel=7 physical_pixel=7
+18:42:16.372 BOARD LED STEP ring=0 logical_pixel=8 physical_pixel=8
+18:42:16.444 BOARD LED STEP ring=0 logical_pixel=9 physical_pixel=9
+18:42:16.516 BOARD LED STEP ring=0 logical_pixel=10 physical_pixel=10
+18:42:16.588 BOARD LED STEP ring=0 logical_pixel=11 physical_pixel=11
+18:42:16.660 BOARD LED STEP ring=0 logical_pixel=12 physical_pixel=12
+18:42:16.732 BOARD LED STEP ring=0 logical_pixel=13 physical_pixel=13
+18:42:16.804 BOARD LED STEP ring=0 logical_pixel=14 physical_pixel=14
+18:42:16.876 BOARD LED STEP ring=0 logical_pixel=15 physical_pixel=15
+18:42:16.949 BOARD LED STEP ring=1 logical_pixel=0 physical_pixel=16
+18:42:17.020 BOARD LED STEP ring=1 logical_pixel=1 physical_pixel=17
+18:42:17.093 BOARD LED STEP ring=1 logical_pixel=2 physical_pixel=18
+18:42:17.164 BOARD LED STEP ring=1 logical_pixel=3 physical_pixel=19
+18:42:17.236 BOARD LED STEP ring=1 logical_pixel=4 physical_pixel=20
+18:42:17.308 BOARD LED STEP ring=1 logical_pixel=5 physical_pixel=21
+18:42:17.380 BOARD LED STEP ring=1 logical_pixel=6 physical_pixel=22
+18:42:17.452 BOARD LED STEP ring=1 logical_pixel=7 physical_pixel=23
+18:42:17.524 BOARD LED STEP ring=1 logical_pixel=8 physical_pixel=24
+18:42:17.596 BOARD LED STEP ring=1 logical_pixel=9 physical_pixel=25
+18:42:17.668 BOARD LED STEP ring=1 logical_pixel=10 physical_pixel=26
+18:42:17.740 BOARD LED STEP ring=1 logical_pixel=11 physical_pixel=27
+18:42:17.812 BOARD LED STEP ring=1 logical_pixel=12 physical_pixel=28
+18:42:17.884 BOARD LED STEP ring=1 logical_pixel=13 physical_pixel=29
+18:42:17.957 BOARD LED STEP ring=1 logical_pixel=14 physical_pixel=30
+18:42:18.028 BOARD LED STEP ring=1 logical_pixel=15 physical_pixel=31
+18:42:18.100 BOARD LED STEP ring=2 logical_pixel=0 physical_pixel=32
+18:42:18.172 BOARD LED STEP ring=2 logical_pixel=1 physical_pixel=33
+18:42:18.244 BOARD LED STEP ring=2 logical_pixel=2 physical_pixel=34
+18:42:18.316 BOARD LED STEP ring=2 logical_pixel=3 physical_pixel=35
+18:42:18.388 BOARD LED STEP ring=2 logical_pixel=4 physical_pixel=36
+18:42:18.461 BOARD LED STEP ring=2 logical_pixel=5 physical_pixel=37
+18:42:18.532 BOARD LED STEP ring=2 logical_pixel=6 physical_pixel=38
+18:42:18.604 BOARD LED STEP ring=2 logical_pixel=7 physical_pixel=39
+18:42:18.676 BOARD LED STEP ring=2 logical_pixel=8 physical_pixel=40
+18:42:18.748 BOARD LED STEP ring=2 logical_pixel=9 physical_pixel=41
+18:42:18.820 BOARD LED STEP ring=2 logical_pixel=10 physical_pixel=42
+18:42:18.892 BOARD LED STEP ring=2 logical_pixel=11 physical_pixel=43
+18:42:18.964 BOARD LED STEP ring=2 logical_pixel=12 physical_pixel=44
+18:42:19.036 BOARD LED STEP ring=2 logical_pixel=13 physical_pixel=45
+18:42:19.108 BOARD LED STEP ring=2 logical_pixel=14 physical_pixel=46
+18:42:19.180 BOARD LED STEP ring=2 logical_pixel=15 physical_pixel=47
+18:42:19.247 BOARD LED TEST WALK done
+18:42:19.248 BOARD LED OK WALK
+
+CHECK CHASE 2 60: A soft dot should chase smoothly on every selected ring.
+18:42:20.471 HOST  CHASE 2 60
+18:42:20.479 BOARD LED TEST CHASE start cycles=2 delay_ms=60
+18:42:22.461 BOARD LED TEST CHASE done
+18:42:22.463 BOARD LED OK CHASE
+
+CHECK POWER 45: All rings should be even white, without flicker/yellowing/reset.
+18:42:24.100 HOST  POWER 45
+18:42:24.117 BOARD LED POWER brightness=45 expected=all_rings_even_white watch_for=brownout,flicker,yellowing,end_dropoff
+18:42:24.117 BOARD LED OK POWER
+
+CHECK CLEAR: All LEDs should turn off.
+18:42:28.198 HOST  CLEAR
+18:42:28.205 BOARD LED OK CLEAR
+Using serial port: /dev/cu.usbserial-110
+18:42:40.583 HOST  STATUS
+18:42:40.598 BOARD LED STATUS pin=23 rings=3 leds_per_ring=16 total_leds=48 brightness=45 auto=0 selected_ring=-1 move_gap_ms=90 moving_pixel=15
+18:42:40.605 BOARD LED RING lane=0 first_pixel=0 last_pixel=15 hit_pixel=0 offset=0
+18:42:40.611 BOARD LED RING lane=1 first_pixel=16 last_pixel=31 hit_pixel=0 offset=0
+18:42:40.617 BOARD LED RING lane=2 first_pixel=32 last_pixel=47 hit_pixel=0 offset=0
+18:42:40.618 BOARD LED OK STATUS
+18:42:41.639 HOST  COLOR RED 0
+18:42:41.647 BOARD LED OK COLOR
+18:42:42.669 HOST  COLOR GREEN 1
+18:42:42.677 BOARD LED OK COLOR
+18:42:43.697 HOST  COLOR BLUE 2
+18:42:43.705 BOARD LED OK COLOR
+18:42:44.726 HOST  CLEAR
+18:42:44.733 BOARD LED OK CLEAR
+Using serial port: /dev/cu.usbserial-110
+Starting NeoPixel diagnostic suite.
+
+CHECK STATUS: Board should report pin=23, rings=3, total_leds=48.
+18:48:46.152 HOST  STATUS
+18:48:46.165 BOARD LED STATUS pin=23 rings=3 leds_per_ring=16 total_leds=48 brightness=45 auto=0 selected_ring=-1 move_gap_ms=90 moving_pixel=15
+18:48:46.173 BOARD LED RING lane=0 first_pixel=0 last_pixel=15 hit_pixel=0 offset=0
+18:48:46.179 BOARD LED RING lane=1 first_pixel=16 last_pixel=31 hit_pixel=0 offset=0
+18:48:46.186 BOARD LED RING lane=2 first_pixel=32 last_pixel=47 hit_pixel=0 offset=0
+18:48:46.186 BOARD LED OK STATUS
+
+CHECK WIRING: Ring 0 should be red, ring 1 green, ring 2 blue.
+18:48:47.002 HOST  WIRING
+18:48:47.009 BOARD LED OK WIRING
+
+CHECK COLOR RED ALL: All rings should be red. Wrong color means color-order/data issue.
+18:48:51.075 HOST  COLOR RED ALL
+18:48:51.083 BOARD LED OK COLOR
+
+CHECK COLOR GREEN ALL: All rings should be green.
+18:48:53.131 HOST  COLOR GREEN ALL
+18:48:53.139 BOARD LED OK COLOR
+
+CHECK COLOR BLUE ALL: All rings should be blue.
+18:48:55.173 HOST  COLOR BLUE ALL
+18:48:55.181 BOARD LED OK COLOR
+
+CHECK WALK ALL 70: One pixel should walk through ring 0, then 1, then 2.
+18:48:57.234 HOST  WALK ALL 70
+18:48:57.242 BOARD LED TEST WALK start target=-1 delay_ms=70
+18:48:57.247 BOARD LED STEP ring=0 logical_pixel=0 physical_pixel=0
+18:48:57.317 BOARD LED STEP ring=0 logical_pixel=1 physical_pixel=1
+18:48:57.389 BOARD LED STEP ring=0 logical_pixel=2 physical_pixel=2
+18:48:57.461 BOARD LED STEP ring=0 logical_pixel=3 physical_pixel=3
+18:48:57.533 BOARD LED STEP ring=0 logical_pixel=4 physical_pixel=4
+18:48:57.605 BOARD LED STEP ring=0 logical_pixel=5 physical_pixel=5
+18:48:57.677 BOARD LED STEP ring=0 logical_pixel=6 physical_pixel=6
+18:48:57.749 BOARD LED STEP ring=0 logical_pixel=7 physical_pixel=7
+18:48:57.821 BOARD LED STEP ring=0 logical_pixel=8 physical_pixel=8
+18:48:57.893 BOARD LED STEP ring=0 logical_pixel=9 physical_pixel=9
+18:48:57.965 BOARD LED STEP ring=0 logical_pixel=10 physical_pixel=10
+18:48:58.037 BOARD LED STEP ring=0 logical_pixel=11 physical_pixel=11
+18:48:58.109 BOARD LED STEP ring=0 logical_pixel=12 physical_pixel=12
+18:48:58.181 BOARD LED STEP ring=0 logical_pixel=13 physical_pixel=13
+18:48:58.253 BOARD LED STEP ring=0 logical_pixel=14 physical_pixel=14
+18:48:58.325 BOARD LED STEP ring=0 logical_pixel=15 physical_pixel=15
+18:48:58.397 BOARD LED STEP ring=1 logical_pixel=0 physical_pixel=16
+18:48:58.469 BOARD LED STEP ring=1 logical_pixel=1 physical_pixel=17
+18:48:58.541 BOARD LED STEP ring=1 logical_pixel=2 physical_pixel=18
+18:48:58.613 BOARD LED STEP ring=1 logical_pixel=3 physical_pixel=19
+18:48:58.685 BOARD LED STEP ring=1 logical_pixel=4 physical_pixel=20
+18:48:58.757 BOARD LED STEP ring=1 logical_pixel=5 physical_pixel=21
+18:48:58.829 BOARD LED STEP ring=1 logical_pixel=6 physical_pixel=22
+18:48:58.901 BOARD LED STEP ring=1 logical_pixel=7 physical_pixel=23
+18:48:58.973 BOARD LED STEP ring=1 logical_pixel=8 physical_pixel=24
+18:48:59.045 BOARD LED STEP ring=1 logical_pixel=9 physical_pixel=25
+18:48:59.117 BOARD LED STEP ring=1 logical_pixel=10 physical_pixel=26
+18:48:59.189 BOARD LED STEP ring=1 logical_pixel=11 physical_pixel=27
+18:48:59.261 BOARD LED STEP ring=1 logical_pixel=12 physical_pixel=28
+18:48:59.333 BOARD LED STEP ring=1 logical_pixel=13 physical_pixel=29
+18:48:59.405 BOARD LED STEP ring=1 logical_pixel=14 physical_pixel=30
+18:48:59.477 BOARD LED STEP ring=1 logical_pixel=15 physical_pixel=31
+18:48:59.549 BOARD LED STEP ring=2 logical_pixel=0 physical_pixel=32
+18:48:59.621 BOARD LED STEP ring=2 logical_pixel=1 physical_pixel=33
+18:48:59.693 BOARD LED STEP ring=2 logical_pixel=2 physical_pixel=34
+18:48:59.765 BOARD LED STEP ring=2 logical_pixel=3 physical_pixel=35
+18:48:59.837 BOARD LED STEP ring=2 logical_pixel=4 physical_pixel=36
+18:48:59.909 BOARD LED STEP ring=2 logical_pixel=5 physical_pixel=37
+18:48:59.981 BOARD LED STEP ring=2 logical_pixel=6 physical_pixel=38
+18:49:00.063 BOARD LED STEP ring=2 logical_pixel=7 physical_pixel=39
+18:49:00.125 BOARD LED STEP ring=2 logical_pixel=8 physical_pixel=40
+18:49:00.197 BOARD LED STEP ring=2 logical_pixel=9 physical_pixel=41
+18:49:00.269 BOARD LED STEP ring=2 logical_pixel=10 physical_pixel=42
+18:49:00.341 BOARD LED STEP ring=2 logical_pixel=11 physical_pixel=43
+18:49:00.413 BOARD LED STEP ring=2 logical_pixel=12 physical_pixel=44
+18:49:00.486 BOARD LED STEP ring=2 logical_pixel=13 physical_pixel=45
+18:49:00.557 BOARD LED STEP ring=2 logical_pixel=14 physical_pixel=46
+18:49:00.629 BOARD LED STEP ring=2 logical_pixel=15 physical_pixel=47
+18:49:00.696 BOARD LED TEST WALK done
+18:49:00.698 BOARD LED OK WALK
+
+CHECK CHASE 2 60: A soft dot should chase smoothly on every selected ring.
+18:49:01.923 HOST  CHASE 2 60
+18:49:01.931 BOARD LED TEST CHASE start cycles=2 delay_ms=60
+18:49:03.912 BOARD LED TEST CHASE done
+18:49:03.914 BOARD LED OK CHASE
+
+CHECK POWER 45: All rings should be even white, without flicker/yellowing/reset.
+18:49:05.553 HOST  POWER 45
+18:49:05.570 BOARD LED POWER brightness=45 expected=all_rings_even_white watch_for=brownout,flicker,yellowing,end_dropoff
+18:49:05.571 BOARD LED OK POWER
+
+CHECK CLEAR: All LEDs should turn off.
+18:49:09.647 HOST  CLEAR
+18:49:09.654 BOARD LED OK CLEAR
