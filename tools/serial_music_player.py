@@ -209,7 +209,19 @@ class PlayerState:
         self.sync_debug_samples_left = 0
         self.board_countdown_ms = 0
         self.score = 0
+        self.quality_pct = 0
         self.combo = 0
+        self.max_combo = 0
+        self.hits = 0
+        self.misses = 0
+        self.extras = 0
+        self.hit_rate_pct = 0
+        self.avg_delta_ms = 0
+        self.grade = "-"
+        self.perfect = 0
+        self.great = 0
+        self.good = 0
+        self.bad = 0
         self.next_lane = "none"
         self.next_in_ms = -1
         self.last_game_event = "waiting for board"
@@ -428,8 +440,32 @@ class PlayerState:
                 )
             if "score" in fields:
                 self.score = parse_int(fields["score"], self.score)
+            if "quality_pct" in fields:
+                self.quality_pct = parse_int(fields["quality_pct"], self.quality_pct)
             if "combo" in fields:
                 self.combo = parse_int(fields["combo"], self.combo)
+            if "max_combo" in fields:
+                self.max_combo = parse_int(fields["max_combo"], self.max_combo)
+            if "hits" in fields:
+                self.hits = parse_int(fields["hits"], self.hits)
+            if "misses" in fields:
+                self.misses = parse_int(fields["misses"], self.misses)
+            if "extras" in fields:
+                self.extras = parse_int(fields["extras"], self.extras)
+            if "hit_rate_pct" in fields:
+                self.hit_rate_pct = parse_int(fields["hit_rate_pct"], self.hit_rate_pct)
+            if "avg_delta_ms" in fields:
+                self.avg_delta_ms = parse_int(fields["avg_delta_ms"], self.avg_delta_ms)
+            if "grade" in fields:
+                self.grade = fields["grade"]
+            if "perfect" in fields:
+                self.perfect = parse_int(fields["perfect"], self.perfect)
+            if "great" in fields:
+                self.great = parse_int(fields["great"], self.great)
+            if "good" in fields:
+                self.good = parse_int(fields["good"], self.good)
+            if "bad" in fields:
+                self.bad = parse_int(fields["bad"], self.bad)
             if "next_name" in fields:
                 self.next_lane = fields["next_name"]
             if "next_in_ms" in fields:
@@ -476,7 +512,10 @@ class PlayerState:
                 self.last_game_event = f"miss {name} note={note_ms}ms"
             elif event == "FINISH":
                 self.board_mode = "finished"
-                self.last_game_event = "song finished"
+                self.last_game_event = (
+                    f"finished grade={self.grade} score={self.score}% "
+                    f"hits={self.hits} misses={self.misses}"
+                )
             elif event == "STOP":
                 self.board_mode = "ready"
                 self.last_game_event = "stopped"
@@ -591,7 +630,13 @@ def serial_status_line(state: PlayerState) -> str:
         board_song_ms = state.board_song_ms
         board_countdown_ms = state.board_countdown_ms
         score = state.score
+        grade = state.grade
         combo = state.combo
+        max_combo = state.max_combo
+        hits = state.hits
+        misses = state.misses
+        hit_rate_pct = state.hit_rate_pct
+        avg_delta_ms = state.avg_delta_ms
         next_lane = state.next_lane
         next_in_ms = state.next_in_ms
         last_game_event = state.last_game_event
@@ -613,7 +658,9 @@ def serial_status_line(state: PlayerState) -> str:
         f"{progress_line(state)} | mode={board_mode} board={board_song_ms}ms | "
         f"track={track_id} chart={chart.chart_id if chart else '?'} "
         f"difficulty={chart.difficulty if chart else '?'} | "
-        f"{sync_text} | score={score} combo={combo} | {next_text} | {last_game_event}"
+        f"{sync_text} | score={score}% grade={grade} combo={combo}/{max_combo} | "
+        f"hits={hits} misses={misses} hit_rate={hit_rate_pct}% avg={avg_delta_ms}ms | "
+        f"{next_text} | {last_game_event}"
     )
 
 
@@ -625,7 +672,10 @@ def compact_serial_status_line(state: PlayerState) -> str:
         board_mode = state.board_mode
         board_countdown_ms = state.board_countdown_ms
         score = state.score
+        grade = state.grade
         combo = state.combo
+        max_combo = state.max_combo
+        hit_rate_pct = state.hit_rate_pct
         next_lane = state.next_lane
         next_in_ms = state.next_in_ms
 
@@ -639,7 +689,10 @@ def compact_serial_status_line(state: PlayerState) -> str:
     if board_countdown_ms > 0:
         next_text = f"countdown={board_countdown_ms}ms"
 
-    return f"[status] {progress_line(state)} | {board_mode} | {sync_text} | score={score} combo={combo} | {next_text}"
+    return (
+        f"[status] {progress_line(state)} | {board_mode} | {sync_text} | "
+        f"score={score}% grade={grade} combo={combo}/{max_combo} hit_rate={hit_rate_pct}% | {next_text}"
+    )
 
 
 def trim_line(text: str, width: int) -> str:
@@ -657,7 +710,19 @@ def dashboard_text(state: PlayerState, width: int) -> str:
         board_song_ms = state.board_song_ms
         board_countdown_ms = state.board_countdown_ms
         score = state.score
+        quality_pct = state.quality_pct
         combo = state.combo
+        max_combo = state.max_combo
+        hits = state.hits
+        misses = state.misses
+        extras = state.extras
+        hit_rate_pct = state.hit_rate_pct
+        avg_delta_ms = state.avg_delta_ms
+        grade = state.grade
+        perfect = state.perfect
+        great = state.great
+        good = state.good
+        bad = state.bad
         next_lane = state.next_lane
         next_in_ms = state.next_in_ms
         last_game_event = state.last_game_event
@@ -699,7 +764,10 @@ def dashboard_text(state: PlayerState, width: int) -> str:
         f"Playback: {progress_line(state)}",
         f"Board clock: {board_song_ms}ms",
         f"PC/board sync: {sync_text}",
-        f"Score: {score}    Combo: {combo}",
+        f"Score: {score}%    Grade: {grade}    Combo: {combo} (max {max_combo})",
+        f"Hits: {hits}/{notes} ({hit_rate_pct}%)    Misses: {misses}    Extra hits: {extras}",
+        f"Timing: {quality_pct}% quality    Avg error: {avg_delta_ms}ms",
+        f"Judgements: perfect {perfect}  great {great}  good {good}  bad {bad}",
         f"Next: {next_text}",
         f"Last event: {last_game_event}",
         "",

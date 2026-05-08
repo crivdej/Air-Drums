@@ -12,6 +12,7 @@ GENERATED_CHARTS_DIR = REPO_ROOT / "src" / "generated_charts"
 PC_TRACKS_DIR = REPO_ROOT / "pc_tracks"
 CHARTLOADER = REPO_ROOT / "tools" / "chartloader.py"
 SERIAL_PLAYER = REPO_ROOT / "tools" / "serial_music_player.py"
+CHART_REGISTRY_GENERATOR = REPO_ROOT / "tools" / "generate_chart_registry.py"
 STFS_MAGIC = (b"CON ", b"LIVE", b"PIRS")
 
 
@@ -122,6 +123,10 @@ def main() -> int:
             return loader_status
     else:
         print("No new charts need loading.", flush=True)
+        if CHART_REGISTRY_GENERATOR.exists():
+            registry_status = run([sys.executable, str(CHART_REGISTRY_GENERATOR)])
+            if registry_status != 0:
+                return registry_status
 
     if args.no_player:
         return 0

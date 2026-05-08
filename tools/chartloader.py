@@ -16,6 +16,7 @@ TOOLS_DIR = REPO_ROOT / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
 from extract_rb3con import extract_package  # noqa: E402
+from generate_chart_registry import generate_chart_registry  # noqa: E402
 from midi_to_chart_header import read_midi, sanitize_identifier  # noqa: E402
 
 
@@ -444,6 +445,9 @@ def main() -> int:
 
     if not results and not failures:
         print("No new chart folders needed loading.")
+
+    if not failures:
+        generate_chart_registry()
 
     if results:
         print("\nLoaded songs:")
