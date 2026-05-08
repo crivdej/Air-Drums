@@ -28,7 +28,7 @@ use these in the game code:
 
 important: kick echo uses pin `13`, so the neopixel ring data pin cannot use `13`.
 
-this project now uses pin `15` for the chained ring data line.
+this NeoPixel diagnostic branch uses pin `23` for the chained ring data line.
 
 ## how this should connect
 
@@ -48,7 +48,7 @@ her repo should keep owning:
 - `playDrum(...)`
 - sample data
 
-this project still uses pin `15` for the chained led rings because kick echo uses pin `13`.
+this diagnostic branch uses pin `23` for the chained led rings because kick echo uses pin `13`.
 
 ## how to merge later
 

@@ -11,15 +11,17 @@ import wave
 import shutil
 from pathlib import Path
 
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+
+try:
+    import pygame
+except ModuleNotFoundError:
+    pygame = None
+
 try:
     import serial
     from serial.tools import list_ports
 except ModuleNotFoundError:
-    platformio_python = Path.home() / ".platformio" / "penv" / "bin" / "python"
-    if platformio_python.exists() and Path(sys.executable).resolve() != platformio_python.resolve():
-        # use the platformio python because it already has pyserial installed
-        os.execv(str(platformio_python), [str(platformio_python), *sys.argv])
-
     serial = None
     list_ports = None
 
@@ -103,6 +105,26 @@ def terminal_width() -> int:
     return shutil.get_terminal_size((100, 24)).columns
 
 
+def pygame_mixer_config(path: Path) -> tuple[int, int, int] | None:
+    if pygame is None or path.suffix.lower() != ".wav":
+        return None
+
+    try:
+        with wave.open(str(path), "rb") as audio_file:
+            sample_width = audio_file.getsampwidth()
+            sample_rate = audio_file.getframerate()
+            channels = audio_file.getnchannels()
+    except wave.Error:
+        return None
+
+    if sample_width == 1:
+        sample_size = 8
+    else:
+        sample_size = -8 * sample_width
+
+    return sample_rate, sample_size, channels
+
+
 class PlayerState:
     def __init__(self, serial_port, tracks_dir: Path) -> None:
         self.serial_port = serial_port
@@ -110,7 +132,12 @@ class PlayerState:
         self.current_track_id = ""
         self.current_track_path: Path | None = None
         self.audio_process: subprocess.Popen | None = None
-        self.start_timer: threading.Timer | None = None
+        self.audio_backend = "afplay"
+        self.pygame_sound = None
+        self.pygame_channel = None
+        self.pygame_config: tuple[int, int, int] | None = None
+        self.start_timer: threading.Thread | None = None
+        self.start_cancel_event = threading.Event()
         self.scheduled_start_time = 0.0
         self.playback_start_time = 0.0
         self.audio_expected_start_time = 0.0
@@ -142,11 +169,48 @@ class PlayerState:
         self.serial_port.write((line + "\n").encode("utf-8"))
         self.serial_port.flush()
 
+    def prepare_audio_backend(self, track_path: Path) -> str:
+        self.audio_backend = "afplay"
+        self.pygame_sound = None
+        self.pygame_channel = None
+
+        config = pygame_mixer_config(track_path)
+        if config is None:
+            return "afplay"
+
+        try:
+            if self.pygame_config != config or not pygame.mixer.get_init():
+                if pygame.mixer.get_init():
+                    pygame.mixer.quit()
+                pygame.mixer.pre_init(
+                    frequency=config[0],
+                    size=config[1],
+                    channels=config[2],
+                    buffer=256,
+                )
+                pygame.mixer.init()
+                self.pygame_config = config
+
+            self.pygame_sound = pygame.mixer.Sound(str(track_path))
+        except Exception as exc:
+            self.print_line(f"[audio] pygame preload failed, falling back to afplay: {exc}")
+            self.pygame_sound = None
+            self.pygame_channel = None
+            self.audio_backend = "afplay"
+            return "afplay"
+
+        self.audio_backend = "pygame"
+        return "pygame"
+
     def stop_audio(self) -> None:
         with self.lock:
             if self.start_timer is not None:
-                self.start_timer.cancel()
+                self.start_cancel_event.set()
                 self.start_timer = None
+
+            if self.pygame_channel is not None:
+                self.pygame_channel.stop()
+                self.pygame_channel = None
 
             if self.audio_process is not None and self.audio_process.poll() is None:
                 self.audio_process.terminate()
@@ -160,6 +224,22 @@ class PlayerState:
             self.audio_expected_start_time = 0.0
             self.audio_launch_lateness_ms = 0
             self.sync_debug_samples_left = 0
+
+    def wait_and_launch_audio(self, target_time: float, cancel_event: threading.Event) -> None:
+        while True:
+            remaining = target_time - time.monotonic()
+            if remaining <= 0:
+                break
+
+            wait_time = 0.01
+            if remaining < 0.05:
+                wait_time = 0.001
+
+            if cancel_event.wait(min(remaining, wait_time)):
+                return
+
+        if not cancel_event.is_set():
+            self.launch_audio()
 
     def launch_audio(self) -> None:
         timing_text = ""
@@ -176,16 +256,22 @@ class PlayerState:
             if expected_start_time > 0:
                 self.audio_launch_lateness_ms = int((launch_time - expected_start_time) * 1000)
                 timing_text = (
-                    f"[timing] afplay launched "
+                    f"[timing] {self.audio_backend} launched "
                     f"{self.audio_launch_lateness_ms:+d}ms from scheduled start"
                 )
 
-            # afplay keeps this first test tiny because it is built into macos
-            self.audio_process = subprocess.Popen(
-                ["afplay", str(self.current_track_path)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            if self.pygame_sound is not None:
+                self.audio_process = None
+                self.pygame_channel = self.pygame_sound.play()
+            else:
+                # afplay stays as the fallback for non-wav files or missing pygame
+                self.audio_backend = "afplay"
+                self.pygame_channel = None
+                self.audio_process = subprocess.Popen(
+                    ["afplay", str(self.current_track_path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
 
         if timing_text:
             self.print_line(timing_text)
@@ -205,8 +291,9 @@ class PlayerState:
         self.current_track_id = track_id
         self.current_track_path = track_path
         self.current_duration_seconds = audio_duration_seconds(track_path)
+        backend = self.prepare_audio_backend(track_path)
         self.send_line(f"HOST READY {track_id}")
-        self.print_line(f"Loaded track {track_id}: {track_path.name}")
+        self.print_line(f"Loaded track {track_id}: {track_path.name} via {backend}")
 
     def handle_start(self, track_id: str, delay_ms: int) -> None:
         # the board sends a future delay so both sides can agree on when music should begin
@@ -221,11 +308,17 @@ class PlayerState:
 
         with self.lock:
             now = time.monotonic()
-            self.scheduled_start_time = now + delay_seconds
+            target_time = now + delay_seconds
+            self.scheduled_start_time = target_time
             self.audio_expected_start_time = self.scheduled_start_time
             self.playback_start_time = 0.0
             self.sync_debug_samples_left = 8
-            self.start_timer = threading.Timer(delay_seconds, self.launch_audio)
+            self.start_cancel_event = threading.Event()
+            self.start_timer = threading.Thread(
+                target=self.wait_and_launch_audio,
+                args=(target_time, self.start_cancel_event),
+                daemon=True,
+            )
             self.start_timer.start()
 
         self.print_line(
@@ -338,16 +431,23 @@ def progress_line(state: PlayerState) -> str:
         playback_start_time = state.playback_start_time
         duration = state.current_duration_seconds
         audio_process = state.audio_process
+        audio_backend = state.audio_backend
+        pygame_channel = state.pygame_channel
         track_name = state.current_track_path.name if state.current_track_path else "(none)"
 
     if scheduled_start_time > 0:
         remaining = max(0.0, scheduled_start_time - now)
         return f"scheduled: {track_name} starts in {remaining:0.1f}s"
 
-    if audio_process is None:
+    if audio_backend == "pygame":
+        if pygame_channel is None:
+            return f"idle: {track_name}"
+        if not pygame_channel.get_busy():
+            return f"finished: {track_name}"
+    elif audio_process is None:
         return f"idle: {track_name}"
 
-    if audio_process.poll() is not None:
+    if audio_backend != "pygame" and audio_process.poll() is not None:
         return f"finished: {track_name}"
 
     elapsed = max(0.0, now - playback_start_time)
@@ -364,8 +464,16 @@ def pc_elapsed_ms(state: PlayerState) -> int:
     with state.lock:
         playback_start_time = state.playback_start_time
         audio_process = state.audio_process
+        audio_backend = state.audio_backend
+        pygame_channel = state.pygame_channel
 
-    if audio_process is None or audio_process.poll() is not None or playback_start_time <= 0:
+    if playback_start_time <= 0:
+        return 0
+
+    if audio_backend == "pygame":
+        if pygame_channel is None or not pygame_channel.get_busy():
+            return 0
+    elif audio_process is None or audio_process.poll() is not None:
         return 0
 
     return int((time.monotonic() - playback_start_time) * 1000)
@@ -610,6 +718,11 @@ def main() -> int:
         return run_no_board_mode(state, args.track_id, args.delay_ms, args.live_status)
 
     if serial is None:
+        platformio_python = Path.home() / ".platformio" / "penv" / "bin" / "python"
+        if pygame is None and platformio_python.exists() and Path(sys.executable).resolve() != platformio_python.resolve():
+            # use the platformio python because it already has pyserial installed
+            os.execv(str(platformio_python), [str(platformio_python), *sys.argv])
+
         print("pyserial is not installed. Run: pip install pyserial", file=sys.stderr)
         return 1
 

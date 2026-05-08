@@ -1,6 +1,28 @@
 # Air-Drums
 CICS 256 final project — a contactless air drum machine. Three HC-SR04 ultrasonic sensors detect hand gestures within a 15cm trigger zone, each mapped to a drum sound (kick, snare, hi-hat). Audio playback uses the ESP32's built-in DAC driven by a 16kHz hardware timer ISR with drum samples. Signal conditioning via voltage dividers ensures 5V sensor output is safely stepped down to 3.3V for the ESP32 GPIO pins. Built for Spring 2026
 
+## NeoPixel Ring Diagnostics
+
+The `NEOpixels` branch currently boots straight into NeoPixel diagnostic mode. The chained three-ring data line is on ESP32 pin `23`, with three 16-LED rings for `48` total pixels.
+
+Flash and run the guided PC diagnostic:
+
+```bash
+~/.platformio/penv/bin/pio run --target upload
+python3 tools/neopixel_ring_diagnostics.py --interactive --log neopixel_diag.log
+```
+
+Useful manual commands in the diagnostic prompt:
+
+- `STATUS` prints pin, ring count, brightness, selected ring, and physical pixel ranges.
+- `WIRING` sets ring 0 red, ring 1 green, and ring 2 blue.
+- `COLOR RED ALL`, `COLOR GREEN ALL`, and `COLOR BLUE ALL` isolate color-order/data problems.
+- `WALK ALL 70` lights exactly one pixel at a time through ring 0, then 1, then 2.
+- `POWER 45` lights all rings white at a capped brightness so you can watch for flicker, yellowing, resets, or end-of-chain voltage drop.
+- `CLEAR` turns everything off.
+
+If only the first ring responds, check data-out to data-in between ring 0 and ring 1. If colors are swapped, the firmware pixel order is wrong for the LEDs. If white flickers or turns yellow near the end of the chain, power/ground is the suspect before code.
+
 ## PC Backing Track Player
 
 For the first test pass, the board now owns:

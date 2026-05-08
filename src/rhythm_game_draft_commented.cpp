@@ -12,7 +12,7 @@ namespace {
 constexpr int game_ring_count = 3;
 constexpr int game_leds_per_ring = 16;
 constexpr int game_total_leds = game_ring_count * game_leds_per_ring;
-constexpr int game_led_data_pin = 15;
+constexpr int game_led_data_pin = 23;
 constexpr int max_notes = 96;
 constexpr int serial_buffer_size = 96;
 constexpr int game_led_frame_gap_ms = 16;
