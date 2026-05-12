@@ -6,7 +6,10 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import zipfile
 from dataclasses import dataclass
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -17,11 +20,35 @@ sys.path.insert(0, str(TOOLS_DIR))
 
 from extract_rb3con import extract_package  # noqa: E402
 from generate_chart_registry import generate_chart_registry  # noqa: E402
-from midi_to_chart_header import read_midi, sanitize_identifier  # noqa: E402
+from midi_to_chart_header import (  # noqa: E402
+    ChartNote,
+    build_header_text,
+    read_midi,
+    sanitize_identifier,
+)
 
 
 STFS_MAGIC = (b"CON ", b"LIVE", b"PIRS")
 DEFAULT_DIFFICULTY = "easy"
+WAV_LOUDNESS_FILTER = "loudnorm=I=-14:TP=-1.5:LRA=11"
+ZIP_CHART_FILENAMES = ("notes.mid", "notes.chart")
+ZIP_AUDIO_EXTENSIONS = (".ogg", ".wav", ".mp3", ".flac", ".opus", ".aiff", ".aif")
+ZIP_PREFERRED_AUDIO_BASENAMES = (
+    "song",
+    "backing",
+    "background",
+    "guitar",
+    "rhythm",
+    "bass",
+    "drums",
+    "keys",
+    "vocals",
+)
+CHART_DRUM_NOTE_TO_LABEL = {
+    0: "kick",
+    1: "snare",
+    2: "hihat",
+}
 
 
 @dataclass
@@ -55,6 +82,13 @@ def find_package(song_dir: Path) -> Path | None:
     packages = sorted(
         path for path in song_dir.iterdir() if path.is_file() and is_stfs_package(path)
     )
+    if not packages:
+        return None
+    return packages[0]
+
+
+def find_zip_package(song_dir: Path) -> Path | None:
+    packages = sorted(path for path in song_dir.glob("*.zip") if path.is_file())
     if not packages:
         return None
     return packages[0]
@@ -95,16 +129,16 @@ def ffprobe_stream(path: Path) -> dict:
     return {"stream": streams[0], "format": data.get("format", {})}
 
 
-def last_stereo_pair_pan_filter(channel_count: int) -> str:
+def stereo_downmix_pan_filter(channel_count: int) -> str:
     if channel_count < 1:
         raise RuntimeError("audio stream reports zero channels")
 
     if channel_count == 1:
         return "pan=stereo|c0=c0|c1=c0"
 
-    left_channel = channel_count - 2
-    right_channel = channel_count - 1
-    return f"pan=stereo|c0=c{left_channel}|c1=c{right_channel}"
+    left_channels = "+".join(f"c{index}" for index in range(0, channel_count, 2))
+    right_channels = "+".join(f"c{index}" for index in range(1, channel_count, 2))
+    return f"pan=stereo|c0<{left_channels}|c1<{right_channels}"
 
 
 def resolve_onyx_cli(onyx_arg: str | None) -> str | None:
@@ -150,6 +184,90 @@ def extract_if_needed(
         preserve_paths=False,
     )
     return True
+
+
+def safe_zip_members(zip_path: Path) -> list[zipfile.ZipInfo]:
+    with zipfile.ZipFile(zip_path) as archive:
+        return [
+            member
+            for member in archive.infolist()
+            if not member.is_dir() and Path(member.filename).name
+        ]
+
+
+def find_zip_member_by_basename(
+    zip_path: Path,
+    basenames: tuple[str, ...],
+) -> zipfile.ZipInfo | None:
+    wanted = {name.lower() for name in basenames}
+    members = safe_zip_members(zip_path)
+
+    for member in members:
+        if Path(member.filename).name.lower() in wanted:
+            return member
+
+    return None
+
+
+def extract_zip_member(zip_path: Path, member: zipfile.ZipInfo, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as archive:
+        with archive.open(member) as source, destination.open("wb") as target:
+            shutil.copyfileobj(source, target)
+
+
+def extract_zip_chart_if_needed(song_dir: Path, zip_path: Path, force: bool) -> Path:
+    existing_mid = song_dir / "notes.mid"
+    existing_chart = song_dir / "notes.chart"
+
+    if existing_mid.exists() and not force:
+        return existing_mid
+    if existing_chart.exists() and not force:
+        return existing_chart
+
+    member = find_zip_member_by_basename(zip_path, ZIP_CHART_FILENAMES)
+    if member is None:
+        raise RuntimeError(f"{display_path(zip_path)} does not contain notes.mid or notes.chart")
+
+    destination = song_dir / Path(member.filename).name
+    extract_zip_member(zip_path, member, destination)
+    print(f"extracted chart from ZIP: {display_path(destination)}")
+    return destination
+
+
+def audio_member_sort_key(member: zipfile.ZipInfo) -> tuple[int, int, str]:
+    path = Path(member.filename)
+    stem = path.stem.lower()
+    suffix = path.suffix.lower()
+
+    try:
+        preferred_index = ZIP_PREFERRED_AUDIO_BASENAMES.index(stem)
+    except ValueError:
+        preferred_index = len(ZIP_PREFERRED_AUDIO_BASENAMES)
+
+    wav_penalty = 0 if suffix in (".ogg", ".wav") else 1
+    return (preferred_index, wav_penalty, member.filename.lower())
+
+
+def find_zip_audio_member(zip_path: Path) -> zipfile.ZipInfo:
+    members = [
+        member
+        for member in safe_zip_members(zip_path)
+        if Path(member.filename).suffix.lower() in ZIP_AUDIO_EXTENSIONS
+    ]
+    if not members:
+        raise RuntimeError(f"{display_path(zip_path)} does not contain a playable audio file")
+
+    return sorted(members, key=audio_member_sort_key)[0]
+
+
+def extract_zip_audio_to_temp(zip_path: Path, temp_dir: Path) -> Path:
+    member = find_zip_audio_member(zip_path)
+    source_name = Path(member.filename).name
+    destination = temp_dir / source_name
+    extract_zip_member(zip_path, member, destination)
+    print(f"extracted audio from ZIP: {source_name}")
+    return destination
 
 
 def strip_ogg_from_mogg(mogg_path: Path, ogg_path: Path) -> bool:
@@ -217,7 +335,8 @@ def make_wav(track_id: str, audio_source: Path, wav_path: Path, force: bool) -> 
 
     source_info = ffprobe_stream(audio_source)
     channels = int(source_info["stream"].get("channels", 0))
-    pan_filter = last_stereo_pair_pan_filter(channels)
+    pan_filter = stereo_downmix_pan_filter(channels)
+    audio_filter = f"{pan_filter},{WAV_LOUDNESS_FILTER}"
 
     wav_path.parent.mkdir(parents=True, exist_ok=True)
     run_command(
@@ -230,7 +349,7 @@ def make_wav(track_id: str, audio_source: Path, wav_path: Path, force: bool) -> 
             "-i",
             str(audio_source),
             "-filter_complex",
-            pan_filter,
+            audio_filter,
             "-ar",
             "44100",
             "-c:a",
@@ -240,20 +359,171 @@ def make_wav(track_id: str, audio_source: Path, wav_path: Path, force: bool) -> 
     )
 
 
-def make_chart(song_dir: Path, track_id: str, chart_path: Path, difficulty: str, force: bool) -> None:
+def parse_chart_sections(chart_path: Path) -> dict[str, list[str]]:
+    sections: dict[str, list[str]] = {}
+    current_section: str | None = None
+    in_section_body = False
+
+    for raw_line in chart_path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if line.startswith("[") and line.endswith("]"):
+            current_section = line[1:-1]
+            sections.setdefault(current_section, [])
+            in_section_body = False
+            continue
+
+        if current_section is None:
+            continue
+        if line == "{":
+            in_section_body = True
+            continue
+        if line == "}":
+            current_section = None
+            in_section_body = False
+            continue
+
+        if in_section_body:
+            sections[current_section].append(line)
+
+    return sections
+
+
+def chart_setting(sections: dict[str, list[str]], key: str, default: str | None = None) -> str | None:
+    for line in sections.get("Song", []):
+        if "=" not in line:
+            continue
+
+        left, right = line.split("=", 1)
+        if left.strip().lower() == key.lower():
+            return right.strip().strip('"')
+
+    return default
+
+
+def chart_tempos(sections: dict[str, list[str]]) -> list[tuple[int, int]]:
+    tempos: list[tuple[int, int]] = []
+
+    for line in sections.get("SyncTrack", []):
+        parts = line.split()
+        if len(parts) >= 4 and parts[1] == "=" and parts[2] == "B":
+            tempos.append((int(parts[0]), int(parts[3])))
+
+    if not tempos:
+        return [(0, 120000)]
+
+    tempos.sort()
+    if tempos[0][0] != 0:
+        tempos.insert(0, (0, 120000))
+
+    return tempos
+
+
+def chart_tick_to_ms(tick: int, resolution: int, tempos: list[tuple[int, int]]) -> int:
+    total_ms = 0.0
+    last_tick = 0
+    current_bpm_x1000 = 120000
+
+    for tempo_tick, bpm_x1000 in tempos:
+        if tempo_tick > tick:
+            break
+
+        total_ms += ((tempo_tick - last_tick) * 60000000.0) / (
+            current_bpm_x1000 * resolution
+        )
+        last_tick = tempo_tick
+        current_bpm_x1000 = bpm_x1000
+
+    total_ms += ((tick - last_tick) * 60000000.0) / (current_bpm_x1000 * resolution)
+    return int(round(total_ms))
+
+
+def chart_drums_section_name(difficulty: str) -> str:
+    if difficulty == "super_easy":
+        return "EasyDrums"
+    return f"{difficulty.capitalize()}Drums"
+
+
+def convert_chart_notes(chart_path: Path, difficulty: str) -> list[ChartNote]:
+    sections = parse_chart_sections(chart_path)
+    section_name = chart_drums_section_name(difficulty)
+    section_lines = sections.get(section_name)
+    if section_lines is None:
+        raise RuntimeError(f"{display_path(chart_path)} does not contain [{section_name}]")
+
+    resolution = int(chart_setting(sections, "Resolution", "192") or "192")
+    tempos = chart_tempos(sections)
+    notes: list[ChartNote] = []
+    seen_notes: set[tuple[int, int]] = set()
+
+    for line in section_lines:
+        parts = line.split()
+        if len(parts) < 5 or parts[1] != "=" or parts[2] != "N":
+            continue
+
+        tick = int(parts[0])
+        note_number = int(parts[3])
+        label = CHART_DRUM_NOTE_TO_LABEL.get(note_number)
+        if label is None:
+            continue
+
+        lane = {"hihat": 0, "kick": 1, "snare": 2}[label]
+        time_ms = chart_tick_to_ms(tick, resolution, tempos)
+        key = (time_ms, lane)
+        if key in seen_notes:
+            continue
+
+        seen_notes.add(key)
+        notes.append(ChartNote(time_ms, lane, label))
+
+    notes.sort(key=lambda note: (note.time_ms, note.lane))
+    return notes
+
+
+def make_chart_from_chart_file(
+    chart_source_path: Path,
+    track_id: str,
+    chart_path: Path,
+    difficulty: str,
+) -> None:
+    notes = convert_chart_notes(chart_source_path, difficulty)
+    header_text = build_header_text(
+        midi_path=chart_source_path,
+        track_id=track_id,
+        notes=notes,
+        args=SimpleNamespace(difficulty=difficulty),
+        source_label="source chart",
+    )
+    chart_path.parent.mkdir(parents=True, exist_ok=True)
+    chart_path.write_text(header_text, encoding="utf-8")
+
+
+def make_chart(
+    song_dir: Path,
+    track_id: str,
+    chart_source_path: Path,
+    chart_path: Path,
+    difficulty: str,
+    force: bool,
+) -> None:
     if chart_path.exists() and not force:
         return
 
-    notes_path = song_dir / "notes.mid"
-    if not notes_path.exists():
-        raise RuntimeError(f"missing MIDI file: {display_path(notes_path)}")
+    if not chart_source_path.exists():
+        raise RuntimeError(f"missing chart source: {display_path(chart_source_path)}")
+
+    if chart_source_path.suffix.lower() == ".chart":
+        make_chart_from_chart_file(chart_source_path, track_id, chart_path, difficulty)
+        return
 
     chart_path.parent.mkdir(parents=True, exist_ok=True)
     run_command(
         [
             sys.executable,
             str(TOOLS_DIR / "midi_to_chart_header.py"),
-            str(notes_path),
+            str(chart_source_path),
             "--track-id",
             track_id,
             "--difficulty",
@@ -275,12 +545,25 @@ def read_note_count(chart_path: Path, track_id: str) -> int:
     raise RuntimeError(f"could not verify note count in {display_path(chart_path)}")
 
 
-def verify_outputs(track_id: str, song_dir: Path, chart_path: Path, wav_path: Path) -> tuple[int, float]:
-    notes_path = song_dir / "notes.mid"
-    if not notes_path.exists():
-        raise RuntimeError(f"missing extracted MIDI: {display_path(notes_path)}")
+def verify_chart_source(chart_source_path: Path, difficulty: str) -> None:
+    if chart_source_path.suffix.lower() == ".chart":
+        convert_chart_notes(chart_source_path, difficulty)
+        return
 
-    read_midi(notes_path)
+    read_midi(chart_source_path)
+
+
+def verify_outputs(
+    track_id: str,
+    chart_source_path: Path,
+    chart_path: Path,
+    wav_path: Path,
+    difficulty: str,
+) -> tuple[int, float]:
+    if not chart_source_path.exists():
+        raise RuntimeError(f"missing chart source: {display_path(chart_source_path)}")
+
+    verify_chart_source(chart_source_path, difficulty)
 
     if not chart_path.exists() or chart_path.stat().st_size == 0:
         raise RuntimeError(f"missing generated chart: {display_path(chart_path)}")
@@ -317,6 +600,7 @@ def verify_outputs(track_id: str, song_dir: Path, chart_path: Path, wav_path: Pa
 def should_process_song(
     song_dir: Path,
     package_path: Path | None,
+    zip_path: Path | None,
     chart_path: Path,
     wav_path: Path,
     force: bool,
@@ -325,7 +609,14 @@ def should_process_song(
         return True
     if package_path is not None and not (song_dir / "notes.mid").exists():
         return True
-    return (song_dir / "notes.mid").exists() and (not chart_path.exists() or not wav_path.exists())
+    if zip_path is not None and not (
+        (song_dir / "notes.mid").exists() or (song_dir / "notes.chart").exists()
+    ):
+        return True
+    return (
+        ((song_dir / "notes.mid").exists() or (song_dir / "notes.chart").exists())
+        and (not chart_path.exists() or not wav_path.exists())
+    )
 
 
 def load_song(
@@ -338,26 +629,50 @@ def load_song(
 ) -> SongResult | None:
     track_id = song_dir.name
     package_path = find_package(song_dir)
+    zip_path = find_zip_package(song_dir)
     chart_path = generated_charts_dir / f"{track_id}_chart.h"
     wav_path = pc_tracks_dir / f"{track_id}.wav"
 
-    if not should_process_song(song_dir, package_path, chart_path, wav_path, force):
+    if not should_process_song(song_dir, package_path, zip_path, chart_path, wav_path, force):
         return None
 
     print(f"\n== {track_id} ==")
 
-    extracted = extract_if_needed(song_dir, package_path, pc_tracks_dir, force)
-    if extracted:
-        print(f"extracted RB3CON into {display_path(song_dir)}")
+    extracted = False
+    if package_path is not None:
+        extracted = extract_if_needed(song_dir, package_path, pc_tracks_dir, force)
+        if extracted:
+            print(f"extracted RB3CON into {display_path(song_dir)}")
+        chart_source_path = song_dir / "notes.mid"
+    elif zip_path is not None:
+        chart_source_path = extract_zip_chart_if_needed(song_dir, zip_path, force)
+        extracted = True
+    else:
+        chart_source_path = (
+            song_dir / "notes.mid"
+            if (song_dir / "notes.mid").exists()
+            else song_dir / "notes.chart"
+        )
 
-    make_chart(song_dir, track_id, chart_path, difficulty, force)
+    make_chart(song_dir, track_id, chart_source_path, chart_path, difficulty, force)
     print(f"chart ready: {display_path(chart_path)}")
 
-    audio_source = find_audio_source(track_id, song_dir, pc_tracks_dir, onyx_cli)
-    make_wav(track_id, audio_source, wav_path, force)
+    if zip_path is not None and (force or not wav_path.exists()):
+        with tempfile.TemporaryDirectory(prefix=f"{track_id}_", dir=pc_tracks_dir) as temp_dir_name:
+            audio_source = extract_zip_audio_to_temp(zip_path, Path(temp_dir_name))
+            make_wav(track_id, audio_source, wav_path, force)
+    else:
+        audio_source = find_audio_source(track_id, song_dir, pc_tracks_dir, onyx_cli)
+        make_wav(track_id, audio_source, wav_path, force)
     print(f"wav ready: {display_path(wav_path)}")
 
-    note_count, duration = verify_outputs(track_id, song_dir, chart_path, wav_path)
+    note_count, duration = verify_outputs(
+        track_id,
+        chart_source_path,
+        chart_path,
+        wav_path,
+        difficulty,
+    )
     print(f"verified: {note_count} notes, {duration:.2f}s WAV")
 
     return SongResult(

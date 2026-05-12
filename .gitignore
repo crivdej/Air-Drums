@@ -12,8 +12,9 @@ __pycache__/
 pc_tracks/*
 !pc_tracks/.gitkeep
 
-# Files extracted from RB3CON packages
+# Files extracted from song packages
 charts/**/notes.mid
+charts/**/notes.chart
 charts/**/metadata.dta
 charts/**/album.png_xbox
 charts/**/venue.milo_xbox

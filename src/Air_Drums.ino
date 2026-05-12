@@ -698,30 +698,89 @@ void loop_led_test() {
 #define SAMPLE_RATE 16000
 
 constexpr unsigned long sensor_echo_timeout_us = 6000;
+constexpr int AUDIO_VOICE_COUNT = 2;
 
-volatile const uint8_t* current_sample = nullptr;
-volatile uint32_t sample_pos = 0;
-volatile uint32_t sample_len = 0;
+struct AudioVoice {
+  const uint8_t* volatile sample;
+  volatile uint32_t pos;
+  volatile uint32_t len;
+  volatile uint32_t startedAt;
+};
+
+AudioVoice audio_voices[AUDIO_VOICE_COUNT] = {};
+volatile uint32_t next_audio_voice_start = 1;
 
 hw_timer_t* audio_timer = NULL;
 
 void IRAM_ATTR onAudioTimer() {
-  if (current_sample == nullptr) return;
-  if (sample_pos >= sample_len) {
-    current_sample = nullptr;
+  int mixed = 128;
+  int active_voice_count = 0;
+
+  for (int i = 0; i < AUDIO_VOICE_COUNT; i++) {
+    const uint8_t* sample = audio_voices[i].sample;
+
+    if (sample == nullptr) {
+      continue;
+    }
+
+    uint32_t pos = audio_voices[i].pos;
+    uint32_t len = audio_voices[i].len;
+
+    if (pos >= len) {
+      audio_voices[i].sample = nullptr;
+      audio_voices[i].pos = 0;
+      continue;
+    }
+
+    mixed += (int)pgm_read_byte(&sample[pos]) - 128;
+    audio_voices[i].pos = pos + 1;
+    active_voice_count++;
+  }
+
+  if (active_voice_count == 0) {
     dacWrite(DAC_PIN, 128);
     return;
   }
-  dacWrite(DAC_PIN, pgm_read_byte(&current_sample[sample_pos]));
-  sample_pos++;
+
+  if (mixed < 0) {
+    mixed = 0;
+  } else if (mixed > 255) {
+    mixed = 255;
+  }
+
+  dacWrite(DAC_PIN, (uint8_t)mixed);
 }
 
 void playDrum(const uint8_t* data, uint32_t length) {
+  if (data == nullptr || length == 0) {
+    return;
+  }
+
   noInterrupts();
-  current_sample = nullptr;
-  sample_pos = 0;
-  sample_len = length;
-  current_sample = data;
+
+  int voice_index = -1;
+  uint32_t oldest_start = UINT32_MAX;
+
+  for (int i = 0; i < AUDIO_VOICE_COUNT; i++) {
+    const uint8_t* sample = audio_voices[i].sample;
+
+    if (sample == nullptr || audio_voices[i].pos >= audio_voices[i].len) {
+      voice_index = i;
+      break;
+    }
+
+    if (audio_voices[i].startedAt < oldest_start) {
+      oldest_start = audio_voices[i].startedAt;
+      voice_index = i;
+    }
+  }
+
+  audio_voices[voice_index].sample = nullptr;
+  audio_voices[voice_index].pos = 0;
+  audio_voices[voice_index].len = length;
+  audio_voices[voice_index].startedAt = next_audio_voice_start++;
+  audio_voices[voice_index].sample = data;
+
   interrupts();
 }
 

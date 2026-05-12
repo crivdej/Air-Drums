@@ -85,6 +85,7 @@ int game_bad_notes = 0;
 long game_abs_delta_total_ms = 0;
 int game_hit_lockout_ms = 350;
 int quick_note_lockout_ms = 120;
+int local_drum_lockout_ms = 80;
 int countdown_length_ms = 3000;
 int song_end_time_ms = 0;
 
@@ -915,8 +916,13 @@ void update_sensors() {
   game_sensor_cm[lane] = read_one_sensor_cm(lane);
   bool inside = is_hand_inside(game_sensor_cm[lane]);
 
+  int drum_sound_lockout_ms = DEBOUNCE_MS;
+  if (game_mode != mode_playing) {
+    drum_sound_lockout_ms = local_drum_lockout_ms;
+  }
+
   if (inside && !sensor.inZone && can_accept_game_hit(lane, now) &&
-      (now - sensor.lastTriggerMs >= DEBOUNCE_MS)) {
+      (now - sensor.lastTriggerMs >= (unsigned long)drum_sound_lockout_ms)) {
     sensor.lastTriggerMs = now;
     play_local_drum_for_lane(lane);
 
@@ -935,6 +941,9 @@ void update_sensors() {
     }
 
     int lockout_ms = game_hit_lockout_ms;
+    if (game_mode != mode_playing) {
+      lockout_ms = local_drum_lockout_ms;
+    }
     if (hit_chart_note) {
       int next_note_in_ms = next_same_lane_note_in_ms(lane, current_song_ms());
       if (next_note_in_ms >= 0 && next_note_in_ms < game_hit_lockout_ms) {
